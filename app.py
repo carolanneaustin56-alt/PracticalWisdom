@@ -1,7 +1,10 @@
 from flask import Flask, request, jsonify, render_template, session, redirect, url_for, make_response
 from authlib.integrations.flask_client import OAuth
+from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 import sqlite3
+import secrets
+import time
 import os
 
 # Load GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / SECRET_KEY from a local .env file
@@ -16,6 +19,14 @@ except ImportError:
 app = Flask(__name__)
 # Signs the session cookie that keeps a user logged in. Set a real value in production.
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,   # JS can't read the cookie
+    SESSION_COOKIE_SAMESITE="Lax",  # not sent on cross-site POSTs (CSRF defence in depth)
+    # Send the cookie only over HTTPS in production; off by default for local http dev.
+    SESSION_COOKIE_SECURE=os.environ.get("COOKIE_SECURE", "").lower() in ("1", "true", "yes"),
+    # Don't cache static files in dev, so CSS/JS edits show up on a normal refresh.
+    SEND_FILE_MAX_AGE_DEFAULT=0,
+)
 DB = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "tips.db"))
 
 # ── Google OAuth — only enabled when credentials are present, so the app still
@@ -48,7 +59,27 @@ def current_user_id():
 
 # ── Administrator login (separate from Google user login) ──
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
+# Store/compare a HASH, never plaintext. Prefer a pre-computed ADMIN_PASSWORD_HASH;
+# otherwise hash ADMIN_PASSWORD (default "admin" for local dev) once at startup.
+ADMIN_PASSWORD_HASH = os.environ.get("ADMIN_PASSWORD_HASH") or generate_password_hash(
+    os.environ.get("ADMIN_PASSWORD", "admin"), method="pbkdf2:sha256"
+)
+
+# Simple in-memory rate limit for admin login (per process; enough for dev).
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_WINDOW = 300  # seconds
+_login_attempts = {}  # ip -> [timestamps of recent failures]
+
+
+def _login_blocked(ip):
+    now = time.time()
+    recent = [t for t in _login_attempts.get(ip, []) if now - t < LOGIN_WINDOW]
+    _login_attempts[ip] = recent
+    return len(recent) >= LOGIN_MAX_ATTEMPTS
+
+
+def _login_failed(ip):
+    _login_attempts.setdefault(ip, []).append(time.time())
 
 
 def is_admin():
@@ -65,68 +96,55 @@ def admin_required(fn):
     return wrapper
 
 
-def init_db():
+# ── CSRF protection ──
+# A token is kept in the (signed) session and echoed to the page via /api/me. The
+# front-end sends it back as an X-CSRF-Token header on every state-changing request.
+# A cross-site page can't read the token, so it can't forge those requests.
+def csrf_token():
+    token = session.get("csrf_token")
+    if not token:
+        token = secrets.token_hex(32)
+        session["csrf_token"] = token
+    return token
+
+
+@app.before_request
+def csrf_protect():
+    if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+        expected = session.get("csrf_token", "")
+        sent = request.headers.get("X-CSRF-Token", "")
+        if not expected or not sent or not secrets.compare_digest(sent, expected):
+            return jsonify({"error": "Missing or invalid CSRF token — reload the page."}), 400
+
+
+MIGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "migrations")
+
+
+def run_migrations():
+    """Apply any migration .sql files (migrations/NNN_*.sql) not yet recorded, in order.
+
+    Each applied file is recorded in schema_migrations so it runs exactly once. Files use
+    `CREATE TABLE IF NOT EXISTS`, so this is also safe to run against an existing database.
+    """
     with get_db() as conn:
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS tips (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                content TEXT NOT NULL,
-                anecdote TEXT DEFAULT '',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "  filename TEXT PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        applied = {r["filename"] for r in conn.execute("SELECT filename FROM schema_migrations")}
+        files = sorted(f for f in os.listdir(MIGRATIONS_DIR) if f.endswith(".sql"))
+        for fname in files:
+            if fname in applied:
+                continue
+            with open(os.path.join(MIGRATIONS_DIR, fname)) as fh:
+                conn.executescript(fh.read())
+            conn.execute("INSERT INTO schema_migrations (filename) VALUES (?)", (fname,))
+            app.logger.info("applied migration %s", fname)
+        conn.commit()
 
-            CREATE TABLE IF NOT EXISTS tags (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                tier TEXT NOT NULL DEFAULT 'primary'
-            );
 
-            CREATE TABLE IF NOT EXISTS tip_tags (
-                tip_id INTEGER NOT NULL REFERENCES tips(id) ON DELETE CASCADE,
-                tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
-                PRIMARY KEY (tip_id, tag_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                google_sub TEXT NOT NULL UNIQUE,
-                email TEXT,
-                name TEXT,
-                picture TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-
-            -- one row per (user, tip); value is +1 or -1
-            CREATE TABLE IF NOT EXISTS votes (
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                tip_id INTEGER NOT NULL REFERENCES tips(id) ON DELETE CASCADE,
-                value INTEGER NOT NULL,
-                PRIMARY KEY (user_id, tip_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS favorites (
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                tip_id INTEGER NOT NULL REFERENCES tips(id) ON DELETE CASCADE,
-                PRIMARY KEY (user_id, tip_id)
-            );
-
-            -- tips a user has visited in the network, so the "next suggested tip"
-            -- never re-suggests them (persists across logout/login)
-            CREATE TABLE IF NOT EXISTS seen_tips (
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                tip_id INTEGER NOT NULL REFERENCES tips(id) ON DELETE CASCADE,
-                seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (user_id, tip_id)
-            );
-        """)
-        # Migration: add anecdote column to pre-existing tips tables.
-        cols = [r["name"] for r in conn.execute("PRAGMA table_info(tips)").fetchall()]
-        if "anecdote" not in cols:
-            conn.execute("ALTER TABLE tips ADD COLUMN anecdote TEXT DEFAULT ''")
-        # Migration: add tier column to pre-existing tags tables (default primary).
-        tag_cols = [r["name"] for r in conn.execute("PRAGMA table_info(tags)").fetchall()]
-        if "tier" not in tag_cols:
-            conn.execute("ALTER TABLE tags ADD COLUMN tier TEXT NOT NULL DEFAULT 'primary'")
+def init_db():
+    run_migrations()
 
 
 def get_or_create_tag(conn, name, tier=None):
@@ -317,6 +335,49 @@ def update_tags(tip_id):
         return jsonify(tip_with_tags(conn, tip_id))
 
 
+@app.post("/api/tips/<int:tip_id>/tags")
+@admin_required
+def add_tag_to_tip(tip_id):
+    """Add a single tag to one tip (creating it if new). For the 'apply a tag' tool."""
+    data = request.get_json(force=True) or {}
+    name = (data.get("tag") or "").strip().lower()
+    tier = data.get("tier", "secondary")
+    if tier not in ("primary", "secondary"):
+        tier = "secondary"
+    if not name:
+        return jsonify({"error": "tag is required"}), 400
+    with get_db() as conn:
+        if not conn.execute("SELECT 1 FROM tips WHERE id = ?", (tip_id,)).fetchone():
+            return jsonify({"error": "tip not found"}), 404
+        # Reuse an existing tag as-is (don't change its tier); only new tags use `tier`.
+        existing = conn.execute("SELECT id FROM tags WHERE name = ?", (name,)).fetchone()
+        tag_id = existing["id"] if existing else get_or_create_tag(conn, name, tier=tier)
+        conn.execute("INSERT OR IGNORE INTO tip_tags (tip_id, tag_id) VALUES (?, ?)", (tip_id, tag_id))
+        conn.commit()
+        return jsonify(tip_with_tags(conn, tip_id))
+
+
+@app.delete("/api/tips/<int:tip_id>/tags/<name>")
+@admin_required
+def remove_tag_from_tip(tip_id, name):
+    """Remove a single tag from one tip, unless it would leave the tip with no primary tag."""
+    name = name.strip().lower()
+    with get_db() as conn:
+        if not conn.execute("SELECT 1 FROM tips WHERE id = ?", (tip_id,)).fetchone():
+            return jsonify({"error": "tip not found"}), 404
+        remaining = [r["name"] for r in conn.execute(
+            "SELECT t.name FROM tags t JOIN tip_tags tt ON t.id = tt.tag_id "
+            "WHERE tt.tip_id = ? AND t.name <> ?", (tip_id, name)
+        )]
+        if not will_have_primary(conn, remaining):
+            return jsonify({"error": "That would leave the tip with no primary tag."}), 400
+        tag = conn.execute("SELECT id FROM tags WHERE name = ?", (name,)).fetchone()
+        if tag:
+            conn.execute("DELETE FROM tip_tags WHERE tip_id = ? AND tag_id = ?", (tip_id, tag["id"]))
+        conn.commit()
+        return jsonify(tip_with_tags(conn, tip_id))
+
+
 def parse_batch(text):
     """Parse a stream of words into tips.
 
@@ -343,22 +404,33 @@ def parse_batch(text):
     return [(c, t) for c, t in tips if c]
 
 
-@app.post("/api/tips/batch")
+@app.post("/api/tips/batch/preview")
 @admin_required
-def batch_import():
+def batch_preview():
+    """Parse the pasted text into structured tips WITHOUT saving — for the review step."""
     data = request.get_json(force=True)
     text = data.get("text", "")
+    return jsonify({"tips": [{"content": c, "tags": t} for c, t in parse_batch(text)]})
+
+
+@app.post("/api/tips/batch/commit")
+@admin_required
+def batch_commit():
+    """Insert the reviewed/edited list of tips. First tag is primary, rest secondary."""
+    data = request.get_json(force=True)
+    items = data.get("tips", [])
     inserted = []
     skipped = 0
 
     with get_db() as conn:
-        for content, tags in parse_batch(text):
-            if not tags:
-                skipped += 1  # no tags means no primary tag
+        for item in items:
+            content = (item.get("content") or "").strip()
+            tags = [t.strip().lower() for t in item.get("tags", []) if t and t.strip()]
+            if not content or not tags:
+                skipped += 1  # need content and at least one (primary) tag
                 continue
             cur = conn.execute("INSERT INTO tips (content) VALUES (?)", (content,))
             tip_id = cur.lastrowid
-            # First tag of a tip is primary; the rest are secondary.
             for i, name in enumerate(tags):
                 tag_id = get_or_create_tag(conn, name, tier="primary" if i == 0 else "secondary")
                 conn.execute(
@@ -367,7 +439,7 @@ def batch_import():
             inserted.append(tip_with_tags(conn, tip_id))
         conn.commit()
 
-    return jsonify({"imported": len(inserted), "skipped": skipped, "tips": inserted}), 201
+    return jsonify({"imported": len(inserted), "skipped": skipped}), 201
 
 
 @app.get("/api/tags")
@@ -441,16 +513,24 @@ def api_me():
             user = {"id": u["id"], "email": u["email"], "name": u["name"], "picture": u["picture"]}
         else:
             session.pop("uid", None)  # stale session (user row gone)
-    return jsonify({"user": user, "auth_enabled": AUTH_ENABLED, "is_admin": is_admin()})
+    return jsonify({"user": user, "auth_enabled": AUTH_ENABLED, "is_admin": is_admin(),
+                    "csrf_token": csrf_token()})
 
 
 @app.post("/api/admin/login")
 def admin_login():
+    ip = request.remote_addr or "?"
+    if _login_blocked(ip):
+        return jsonify({"error": "Too many attempts — wait a few minutes and try again."}), 429
     data = request.get_json(force=True) or {}
-    if data.get("username") == ADMIN_USERNAME and data.get("password") == ADMIN_PASSWORD:
-        session["is_admin"] = True
-        return jsonify({"is_admin": True})
-    return jsonify({"error": "Invalid administrator credentials."}), 401
+    ok = (secrets.compare_digest(data.get("username", ""), ADMIN_USERNAME)
+          and check_password_hash(ADMIN_PASSWORD_HASH, data.get("password", "")))
+    if not ok:
+        _login_failed(ip)
+        return jsonify({"error": "Invalid administrator credentials."}), 401
+    _login_attempts.pop(ip, None)  # reset on success
+    session["is_admin"] = True
+    return jsonify({"is_admin": True})
 
 
 @app.post("/api/admin/logout")
