@@ -41,12 +41,22 @@ ADMIN_PASSWORD_HASH=pbkdf2:sha256:...
 
 # Set to 1 in production (HTTPS) so the session cookie is sent only over HTTPS.
 COOKIE_SECURE=
+
+# Optional: AI tag suggestions in the batch importer (Google AI Studio / Gemini, free tier).
+# Get a free key at https://aistudio.google.com/apikey . Without it the "Suggest tags"
+# button just says it's not configured; everything else works as normal.
+GEMINI_API_KEY=
+# GEMINI_MODEL=gemini-2.5-flash            # optional: text-generation model (tag suggestions)
+# GEMINI_EMBED_MODEL=gemini-embedding-001  # optional: embedding model (semantic search)
+# GEMINI_EMBED_DIM=768                     # optional: embedding vector size
 ```
 
 ## Project layout
 
 ```
 app.py                 Flask app: routes, auth, CSRF, migrations runner
+llm.py                 optional Gemini helpers (tag suggestions + text embeddings)
+embeddings.py          semantic-embeddings foundation (search / similarity)
 templates/index.html   page structure only (links to the static files)
 static/styles.css      all styles
 static/app.js          all front-end logic
@@ -65,6 +75,42 @@ repeatedly and against an existing database. To change the schema, add the next 
 ```
 migrations/002_add_something.sql
 ```
+
+## Semantic embeddings (foundation for meaning-based features)
+
+When a Gemini key is set, each tip can be turned into an *embedding* — a vector that captures
+its meaning — stored in the `tip_embeddings` table. This powers features that tag-matching
+can't: searching by meaning, a smarter "next suggested tip", and "related tips" links.
+
+- **Self-maintaining:** adding/editing a tip (or a batch import) embeds it automatically,
+  best-effort — an API hiccup never blocks the write; the tip is just picked up on the next rebuild.
+- **Backfill / repair:** an admin can rebuild the whole index. It only (re)embeds tips that are
+  missing or whose text changed, so it's cheap to re-run.
+
+  ```bash
+  # check coverage  → {"enabled": true, "total": 206, "embedded": 206, "stale": 0, ...}
+  curl http://localhost:5001/api/embeddings/status        # admin session required
+
+  # (re)embed anything missing/stale
+  curl -X POST http://localhost:5001/api/embeddings/rebuild
+  ```
+
+The math lives in `embeddings.py`: vectors are L2-normalised, so cosine similarity is a plain
+dot product, and a brute-force scan over a few hundred tips is microseconds (no vector database
+needed). That one file is the place to add semantic search, the recommender, or similarity edges.
+
+### Features built on the embeddings layer
+
+| Feature | Where | Endpoint |
+|---|---|---|
+| **Semantic search** — find tips by meaning, not matching tags (`✨ Meaning` button) | search bar | `GET /api/tips/search?q=` |
+| **Semantic recommender** — Cards/Network "next suggested tip" by meaning (`Suggest: Meaning` toggle) | Cards + Network | `GET /api/tips/<id>/related` |
+| **Related-tip links** — a selected node links to its nearest tips by meaning (`Links by: Meaning`) | Network | `GET /api/tips/<id>/related` |
+| **Ask for advice** (RAG) — describe a situation, get advice grounded in the most relevant tips, with citations | `Ask` view | `POST /api/advise` |
+
+All four are open to every visitor (no admin needed) and only appear when a Gemini key is set
+(`/api/me` exposes `embeddings_enabled`). `related` uses the stored vectors only — no model call;
+`search` and `advise` embed the query/situation, and `advise` also generates the written answer.
 
 ## Tests
 

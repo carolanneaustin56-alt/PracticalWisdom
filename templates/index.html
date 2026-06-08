@@ -38,13 +38,15 @@
 
   <div id="tip-panel">
     <div id="search-bar">
-      <div id="view-toggle" style="display:flex;gap:6px;margin-right:4px">
-        <button class="btn secondary view-btn active" id="view-list">List</button>
-        <button class="btn secondary view-btn" id="view-network">Network</button>
-        <button class="btn secondary view-btn" id="view-cards">Cards</button>
+      <div id="view-toggle">
+        <button class="view-btn active" id="view-list">List</button>
+        <button class="view-btn" id="view-network">Network</button>
+        <button class="view-btn" id="view-cards">Cards</button>
+        <button class="view-btn" id="view-advise" style="display:none">Ask</button>
       </div>
-      <input id="search-input" type="text" placeholder="Search by tag (comma-separated)…" />
+      <input id="search-input" type="text" placeholder="Tags (comma-separated), or a phrase for ✨ Meaning…" />
       <button class="btn secondary" id="search-btn">Search</button>
+      <button class="btn secondary" id="smart-search-btn" style="display:none" title="Find tips by meaning, not just matching tags">✨ Meaning</button>
       <button class="btn secondary" id="favorites-btn" style="display:none">★ Favorites</button>
       <div id="mgmt-wrap" style="display:none">
         <button class="btn" id="mgmt-toggle">Tips &amp; Tags Management ▾</button>
@@ -70,6 +72,7 @@
         <button class="net-ghost-btn" id="net-reset">Reset view</button>
         <button class="net-ghost-btn" id="net-relayout">Re-layout</button>
         <button class="net-ghost-btn" id="net-clear-history" title="Forget which tips you've visited and re-explore from scratch">Clear history</button>
+        <button class="net-ghost-btn" id="net-suggest-mode" style="display:none" title="How the gold ‘next suggested tip’ is chosen: by shared tags, or by meaning"></button>
       </div>
       <div id="net-hint">Click a region to focus it · click a node for its links &amp; details · scroll to zoom · drag to pan</div>
       <div id="net-card" class="hidden">
@@ -77,8 +80,14 @@
         <div id="net-card-content"></div>
         <div id="net-card-anecdote"></div>
         <div id="net-card-actions"></div>
-        <div class="net-card-tags-label">Secondary tags — click to include/leave out · click OR/AND to combine</div>
+        <div id="net-card-linkmode" style="display:none">
+          <span class="net-linkmode-label">Links by</span>
+          <button class="net-seg" id="linkmode-tags">Tags</button>
+          <button class="net-seg" id="linkmode-related">Meaning ✨</button>
+        </div>
+        <div class="net-card-tags-label" id="net-card-tags-label">Secondary tags — click to include/leave out · click OR/AND to combine</div>
         <div id="net-card-tags"></div>
+        <div id="net-card-related-note" style="display:none"></div>
       </div>
       <div id="net-tooltip"></div>
     </div>
@@ -94,10 +103,23 @@
           <button class="btn secondary" id="cv-prev">‹ Back</button>
           <button class="btn" id="cv-next">Next tip ›</button>
         </div>
-        <button class="btn secondary" id="cv-restart">↻ Start over</button>
+        <div id="cv-foot">
+          <button class="btn secondary" id="cv-restart">↻ Start over</button>
+          <button class="btn secondary" id="cv-suggest-mode" style="display:none" title="How the next tip is chosen: by shared tags, or by meaning"></button>
+        </div>
       </div>
     </div>
     <div id="fav-list"></div>
+    <div id="search-results"></div>
+    <div id="advise-view">
+      <div id="advise-stage">
+        <h2 class="advise-title">Ask for advice</h2>
+        <p class="advise-sub">Describe a situation in your own words. You'll get advice grounded in the most relevant tips — and see exactly which tips it drew on.</p>
+        <textarea id="advise-input" placeholder="e.g. I keep procrastinating on a big project and feel overwhelmed…"></textarea>
+        <button class="btn" id="advise-btn">Get advice</button>
+        <div id="advise-result"></div>
+      </div>
+    </div>
   </div>
 
   <div id="detail-pane" class="hidden">
@@ -164,10 +186,10 @@
     <!-- Stage 1: paste -->
     <div id="batch-stage-input">
       <p style="font-size:0.8rem;color:#666;line-height:1.5">
-        Paste your tips. Tag a tip with <strong>#tag</strong>; the next word after a tag starts the
-        next tip. The <strong>first tag is primary</strong>, the rest are secondary. You'll review and
-        edit the list before anything is saved.<br>
-        Example: <code style="background:#f0f0eb;padding:1px 5px;border-radius:3px">Drink water first thing #health #morning Write your goals #productivity</code>
+        Paste your tips — <strong>one per line</strong> works well. Add <strong>#tags</strong> inline if
+        you like (first tag = primary, the rest secondary), or leave them out and use
+        <strong>✨ Suggest tags</strong>. You'll review and edit everything before it's saved.<br>
+        Example: <code style="background:#f0f0eb;padding:1px 5px;border-radius:3px">Drink water first thing #health #morning</code>
       </p>
       <div>
         <label>Tips</label>
@@ -186,6 +208,7 @@
       <div id="batch-review-list"></div>
       <div id="batch-status" style="font-size:0.8rem;color:#5a8a2a;min-height:1em"></div>
       <div class="modal-actions">
+        <button class="btn secondary" id="batch-suggest-btn" style="margin-right:auto">✨ Suggest tags</button>
         <button class="btn secondary" id="batch-back-btn">← Back to text</button>
         <button class="btn" id="batch-commit-btn">Import</button>
       </div>

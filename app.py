@@ -7,6 +7,9 @@ import secrets
 import time
 import os
 
+import llm  # optional Gemini helpers (reads its key lazily, so import order is fine)
+import embeddings  # semantic-similarity foundation (also degrades to no-op without a key)
+
 # Load GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / SECRET_KEY from a local .env file
 # (if present) so they persist across restarts without re-exporting them each time.
 # Real environment variables still take precedence over .env values.
@@ -212,6 +215,20 @@ def tip_with_tags(conn, tip_id):
     }
 
 
+def embed_quietly(conn, tip_id, content, anecdote=""):
+    """Refresh a tip's embedding, but never let an embedding/network error break the write.
+
+    Content edits make a tip's stored vector stale; this keeps the index current. If the API
+    is down or unconfigured the tip is simply left for the next 'rebuild embeddings' run.
+    """
+    if not embeddings.is_enabled():
+        return
+    try:
+        embeddings.store_one(conn, tip_id, content, anecdote)
+    except llm.LLMError as e:
+        app.logger.warning("embedding skipped for tip %s: %s", tip_id, e)
+
+
 @app.get("/")
 def index():
     # Never cache the page itself, so edits show up on a normal refresh.
@@ -257,6 +274,84 @@ def search_tips():
         return jsonify([tip_with_tags(conn, i) for i in ids])
 
 
+@app.get("/api/tips/search")
+def semantic_search():
+    """Rank tips by semantic similarity to a free-text query.
+
+    Open to everyone (it's a discovery feature). Returns {"enabled": bool, "results": [...]}
+    where each result is a full tip plus a "similarity" score in 0..1. When embeddings aren't
+    configured, enabled is False and results is empty (the UI then hides the 'Meaning' option).
+    """
+    q = (request.args.get("q") or "").strip()
+    try:
+        k = max(1, min(int(request.args.get("k", 20)), 50))
+    except ValueError:
+        k = 20
+    if not q or not embeddings.is_enabled():
+        return jsonify({"enabled": embeddings.is_enabled(), "results": []})
+    with get_db() as conn:
+        try:
+            hits = embeddings.search(conn, q, k=k)
+        except llm.LLMError as e:
+            return jsonify({"error": "Search failed: %s" % e}), 502
+        results = []
+        for h in hits:
+            tip = tip_with_tags(conn, h["tip_id"])
+            if tip:
+                tip["similarity"] = h["score"]
+                results.append(tip)
+    return jsonify({"enabled": True, "results": results})
+
+
+@app.post("/api/advise")
+def advise():
+    """Retrieve the most relevant tips for a described situation, then synthesise grounded
+    advice that cites them (RAG). Open to everyone. Returns {answer, used:[ids], tips:[...]}.
+    """
+    if not embeddings.is_enabled():
+        return jsonify({"error": "The advice assistant needs an AI key (set GEMINI_API_KEY)."}), 503
+    situation = ((request.get_json(force=True) or {}).get("situation") or "").strip()
+    if not situation:
+        return jsonify({"error": "Describe your situation first."}), 400
+    with get_db() as conn:
+        try:
+            hits = embeddings.search(conn, situation, k=6)
+        except llm.LLMError as e:
+            return jsonify({"error": "Retrieval failed: %s" % e}), 502
+        tips = []
+        for h in hits:
+            tip = tip_with_tags(conn, h["tip_id"])
+            if tip:
+                tip["similarity"] = h["score"]
+                tips.append(tip)
+    if not tips:
+        return jsonify({"answer": "There aren't any tips to draw on yet.", "used": [], "tips": []})
+    try:
+        result = llm.advise(situation, [{"id": t["id"], "content": t["content"]} for t in tips])
+    except llm.LLMError as e:
+        return jsonify({"error": "Advice generation failed: %s" % e}), 502
+    return jsonify({"answer": result["answer"], "used": result["used"], "tips": tips})
+
+
+@app.get("/api/tips/<int:tip_id>/related")
+def related_tips(tip_id):
+    """The tips most similar in meaning to this one (uses the stored vector — no API call).
+
+    Powers the semantic 'next suggested tip' and the network's related-link mode. Returns
+    {"enabled": bool, "related": [{"tip_id", "score"}...]} ordered most-similar first.
+    """
+    try:
+        k = max(1, min(int(request.args.get("k", 12)), 50))
+    except ValueError:
+        k = 12
+    if not embeddings.is_enabled():
+        return jsonify({"enabled": False, "related": []})
+    with get_db() as conn:
+        if not conn.execute("SELECT 1 FROM tips WHERE id = ?", (tip_id,)).fetchone():
+            return jsonify({"error": "tip not found"}), 404
+        return jsonify({"enabled": True, "related": embeddings.neighbors(conn, tip_id, k=k)})
+
+
 @app.post("/api/tips")
 @admin_required
 def create_tip():
@@ -279,6 +374,7 @@ def create_tip():
             conn.execute(
                 "INSERT OR IGNORE INTO tip_tags (tip_id, tag_id) VALUES (?, ?)", (tip_id, tag_id)
             )
+        embed_quietly(conn, tip_id, content, anecdote)
         conn.commit()
         return jsonify(tip_with_tags(conn, tip_id)), 201
 
@@ -299,6 +395,7 @@ def update_tip(tip_id):
             "UPDATE tips SET content = ?, anecdote = ? WHERE id = ?",
             (content, anecdote, tip_id),
         )
+        embed_quietly(conn, tip_id, content, anecdote)  # text changed → refresh its vector
         conn.commit()
         return jsonify(tip_with_tags(conn, tip_id))
 
@@ -379,28 +476,30 @@ def remove_tag_from_tip(tip_id, name):
 
 
 def parse_batch(text):
-    """Parse a stream of words into tips.
+    """Parse pasted text into tips.
 
-    Content words build up a tip; #tags attach to it. The first content word
-    seen *after* a tag begins the next tip. Newlines are treated as spaces.
+    Each line is at least one tip (so plain, untagged tips paste one-per-line). Within a
+    line, #tags attach to the current tip and a content word *after* a tag starts the next.
 
     e.g. "Drink water #health #morning Write goals #productivity" ->
          [("Drink water", ["health", "morning"]), ("Write goals", ["productivity"])]
+         and a line with no #tags -> one tip with an empty tag list.
     """
     tips = []
-    content_words = []
-    tags = []
-    for word in text.split():
-        if word.startswith("#"):
-            if len(word) > 1:
-                tags.append(word[1:].lower())
-        else:
-            if tags:  # a content word after tags starts a new tip
-                tips.append((" ".join(content_words).strip(), tags))
-                content_words, tags = [], []
-            content_words.append(word)
-    if content_words or tags:
-        tips.append((" ".join(content_words).strip(), tags))
+    for line in text.splitlines():
+        content_words = []
+        tags = []
+        for word in line.split():
+            if word.startswith("#"):
+                if len(word) > 1:
+                    tags.append(word[1:].lower())
+            else:
+                if tags:  # a content word after tags starts a new tip
+                    tips.append((" ".join(content_words).strip(), tags))
+                    content_words, tags = [], []
+                content_words.append(word)
+        if content_words or tags:
+            tips.append((" ".join(content_words).strip(), tags))
     return [(c, t) for c, t in tips if c]
 
 
@@ -420,6 +519,7 @@ def batch_commit():
     data = request.get_json(force=True)
     items = data.get("tips", [])
     inserted = []
+    new_for_embed = []  # (tip_id, content, anecdote) for a single batched embed below
     skipped = 0
 
     with get_db() as conn:
@@ -437,9 +537,60 @@ def batch_commit():
                     "INSERT OR IGNORE INTO tip_tags (tip_id, tag_id) VALUES (?, ?)", (tip_id, tag_id)
                 )
             inserted.append(tip_with_tags(conn, tip_id))
+            new_for_embed.append((tip_id, content, ""))
+        # Embed all the new tips in one batched call — best-effort, never blocks the import.
+        if embeddings.is_enabled() and new_for_embed:
+            try:
+                embeddings.store_many(conn, new_for_embed)
+            except llm.LLMError as e:
+                app.logger.warning("batch embedding skipped (%d tips): %s", len(new_for_embed), e)
         conn.commit()
 
     return jsonify({"imported": len(inserted), "skipped": skipped}), 201
+
+
+@app.post("/api/llm/suggest-tags")
+@admin_required
+def llm_suggest_tags():
+    """Suggest tags (from the existing taxonomy) for a list of tip contents, via Gemini."""
+    if not llm.is_enabled():
+        return jsonify({"error": "AI tagging isn't configured. Set GEMINI_API_KEY in .env."}), 503
+    data = request.get_json(force=True) or {}
+    contents = [c for c in (data.get("contents") or []) if (c or "").strip()]
+    if not contents:
+        return jsonify({"suggestions": []})
+    with get_db() as conn:
+        primary = [r["name"] for r in conn.execute("SELECT name FROM tags WHERE tier = 'primary' ORDER BY name")]
+        secondary = [r["name"] for r in conn.execute("SELECT name FROM tags WHERE tier = 'secondary' ORDER BY name")]
+    if not primary:
+        return jsonify({"error": "Add some primary tags first so the AI has a taxonomy to use."}), 400
+    try:
+        suggestions = llm.suggest_tags_batch(contents, primary, secondary)
+    except llm.LLMError as e:
+        return jsonify({"error": "AI tagging failed: %s" % e}), 502
+    return jsonify({"suggestions": suggestions})
+
+
+@app.get("/api/embeddings/status")
+@admin_required
+def embeddings_status():
+    """How many tips currently have a semantic embedding (drives the 'rebuild' button)."""
+    with get_db() as conn:
+        return jsonify(embeddings.status(conn))
+
+
+@app.post("/api/embeddings/rebuild")
+@admin_required
+def embeddings_rebuild():
+    """Embed every tip that's missing or out of date. Safe to run repeatedly."""
+    if not embeddings.is_enabled():
+        return jsonify({"error": "Embeddings need an API key. Set GEMINI_API_KEY in .env."}), 503
+    with get_db() as conn:
+        try:
+            result = embeddings.sync_all(conn)
+        except llm.LLMError as e:
+            return jsonify({"error": "Embedding failed: %s" % e}), 502
+    return jsonify(result)
 
 
 @app.get("/api/tags")
@@ -514,6 +665,7 @@ def api_me():
         else:
             session.pop("uid", None)  # stale session (user row gone)
     return jsonify({"user": user, "auth_enabled": AUTH_ENABLED, "is_admin": is_admin(),
+                    "llm_enabled": llm.is_enabled(), "embeddings_enabled": embeddings.is_enabled(),
                     "csrf_token": csrf_token()})
 
 

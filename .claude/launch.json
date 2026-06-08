@@ -4,7 +4,7 @@
     {
       "name": "tips",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["/Users/annaaustin/Documents/PracticalWisdom/app.py"],
+      "runtimeArgs": ["/Users/tomdrummond/Documents/apps/PracticalWisdom/app.py"],
       "port": 5001
     }
   ]

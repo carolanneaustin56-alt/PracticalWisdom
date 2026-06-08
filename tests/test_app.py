@@ -55,6 +55,12 @@ def test_parse_batch_unit(app_module):
     assert parsed == [("Drink water", ["health", "morning"]), ("Write goals", ["focus"])]
 
 
+def test_parse_batch_one_tip_per_line(app_module):
+    # plain (untagged) tips split one-per-line; inline tags still work
+    parsed = app_module.parse_batch("Tip one\nTip two #focus\nTip three")
+    assert parsed == [("Tip one", []), ("Tip two", ["focus"]), ("Tip three", [])]
+
+
 def test_migrations_recorded(app_module):
     with app_module.get_db() as conn:
         applied = [r["filename"] for r in conn.execute("SELECT filename FROM schema_migrations")]
@@ -181,3 +187,46 @@ def test_tag_filter(client, app_module):
     add_tip(app_module, "Body tip", ["physical", "rest"])
     only_financial = client.get("/api/tips?tags=financial").get_json()
     assert [t["content"] for t in only_financial] == ["Money tip"]
+
+
+# ── LLM tag suggestions (no real network calls — Gemini is mocked) ──
+def test_llm_disabled_by_default(client):
+    assert client.get("/api/me").get_json()["llm_enabled"] is False
+
+
+def test_suggest_tags_503_when_not_configured(client):
+    token = login_admin(client)
+    r = client.post("/api/llm/suggest-tags", json={"contents": ["Drink water"]},
+                    headers={"X-CSRF-Token": token})
+    assert r.status_code == 503
+
+
+def test_suggest_tags_batch_filters_to_allowed(monkeypatch):
+    import llm
+    monkeypatch.setattr(llm, "_call_gemini", lambda prompt: [
+        {"primary": "physical", "secondary": ["habit", "notatag", "morning"]},
+        {"primary": "notreal", "secondary": ["focus"]},
+    ])
+    out = llm.suggest_tags_batch(
+        ["Drink water", "Plan your day"],
+        primary_tags=["physical", "achievement"],
+        secondary_tags=["habit", "morning", "focus"],
+    )
+    assert out[0] == {"primary": "physical", "secondary": ["habit", "morning"]}  # dropped 'notatag'
+    assert out[1] == {"primary": None, "secondary": ["focus"]}                    # dropped invalid primary
+
+
+def test_suggest_tags_endpoint_with_mock(client, app_module, monkeypatch):
+    monkeypatch.setattr(app_module.llm, "is_enabled", lambda: True)
+    monkeypatch.setattr(app_module.llm, "suggest_tags_batch",
+                        lambda contents, p, s, **k: [{"primary": "moral", "secondary": ["courage"]}
+                                                     for _ in contents])
+    with app_module.get_db() as conn:
+        conn.execute("INSERT OR IGNORE INTO tags (name, tier) VALUES ('moral', 'primary')")
+        conn.execute("INSERT OR IGNORE INTO tags (name, tier) VALUES ('courage', 'secondary')")
+        conn.commit()
+    token = login_admin(client)
+    r = client.post("/api/llm/suggest-tags", json={"contents": ["Be brave"]},
+                    headers={"X-CSRF-Token": token})
+    assert r.status_code == 200
+    assert r.get_json()["suggestions"] == [{"primary": "moral", "secondary": ["courage"]}]

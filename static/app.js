@@ -10,6 +10,13 @@
   let authEnabled = false;   // whether Google login is configured on the server
   let favoritesOnly = false; // show only the signed-in user's favorites
   let isAdmin = false;       // administrator session (unlocks List view + management)
+  let embeddingsEnabled = false; // whether semantic features (search/recommender) are available
+  let searchActive = false;  // showing semantic-search results instead of the current view
+  let lastSearch = { q: "", results: [] };
+  // How the "next suggested tip" is chosen: "tags" (shared secondary tags) or "meaning"
+  // (semantic similarity via embeddings). Persisted; only effective when embeddings are on.
+  let suggestMode = (() => { try { return localStorage.getItem("suggestMode") || "meaning"; } catch (e) { return "meaning"; } })();
+  const relatedCache = {};   // tip id -> [{tip_id, score}] from /api/tips/<id>/related
 
   const $ = id => document.getElementById(id);
 
@@ -45,8 +52,37 @@
     currentUser = data.user;
     authEnabled = data.auth_enabled;
     isAdmin = data.is_admin;
+    embeddingsEnabled = !!data.embeddings_enabled;
+    const sb = $("smart-search-btn");
+    if (sb) sb.style.display = embeddingsEnabled ? "" : "none";
+    const ab = $("view-advise");
+    if (ab) ab.style.display = embeddingsEnabled ? "" : "none";
+    updateSuggestModeButtons();
     renderAuth();
   }
+
+  // ── Suggestion engine: tag-overlap vs semantic "meaning" (shared by Cards + Network) ──
+  function updateSuggestModeButtons() {
+    const show = embeddingsEnabled;
+    const nb = $("net-suggest-mode"), cb = $("cv-suggest-mode");
+    const meaning = suggestMode === "meaning";
+    if (nb) { nb.style.display = show ? "" : "none"; nb.textContent = meaning ? "Suggest: Meaning ✨" : "Suggest: Tags"; }
+    if (cb) { cb.style.display = show ? "" : "none"; cb.textContent = meaning ? "Suggestions: Meaning ✨" : "Suggestions: Tags"; }
+  }
+
+  function setSuggestMode(mode) {
+    suggestMode = mode;
+    try { localStorage.setItem("suggestMode", mode); } catch (e) {}
+    updateSuggestModeButtons();
+    if (currentView === "cards" && cardCurrent != null) computeCardNext();
+    if (currentView === "network" && NET.selected != null) {
+      const id = NET.selected;
+      if (mode === "meaning" && embeddingsEnabled && !relatedCache[id]) {
+        fetchRelated(id).then(() => { if (NET.selected === id) { applySelectionHighlight(); updateExprHint(); } });
+      } else { applySelectionHighlight(); updateExprHint(); }
+    }
+  }
+  const flipSuggestMode = () => setSuggestMode(suggestMode === "meaning" ? "tags" : "meaning");
 
   function renderAuth() {
     const el = $("auth-area");
@@ -400,6 +436,8 @@
   };
 
   // ── Search ────────────────────────────────────────────────────
+  // Two modes share one input: "Search" filters by exact tags (sidebar-driven), while
+  // "✨ Meaning" ranks tips by semantic similarity to the typed phrase (embeddings).
   $("search-btn").onclick = () => {
     const val = $("search-input").value.trim();
     activeTags = val ? val.split(",").map(t => t.trim().toLowerCase()).filter(Boolean) : [];
@@ -408,6 +446,69 @@
   };
 
   $("search-input").onkeydown = e => { if (e.key === "Enter") $("search-btn").click(); };
+
+  // ── Semantic ("meaning") search ──
+  function showOnlySearchPanel() {
+    ["tip-list", "network-view", "card-view", "fav-list"].forEach(id => { $(id).style.display = "none"; });
+    stopSim();
+    $("net-tooltip").style.display = "none";
+    $("search-results").style.display = "flex";
+  }
+
+  async function runSemanticSearch() {
+    const q = $("search-input").value.trim();
+    if (!q) { $("search-input").focus(); return; }
+    if (!embeddingsEnabled) { toast("Semantic search isn't configured (no AI key)."); return; }
+    searchActive = true;
+    showOnlySearchPanel();
+    const panel = $("search-results");
+    panel.innerHTML = `<div class="fav-list-head">✨ Searching for “${escHtml(q)}”…</div>${SPINNER}`;
+    const res = await api("GET", "/api/tips/search?q=" + encodeURIComponent(q));
+    if (!searchActive) return;                       // user navigated away while it loaded
+    if (res.error) { panel.innerHTML = ERR(res.error); return; }
+    lastSearch = { q, results: res.results || [] };
+    renderSearchResults();
+  }
+
+  function renderSearchResults() {
+    const panel = $("search-results");
+    const { q, results } = lastSearch;
+    panel.innerHTML =
+      `<div class="fav-list-head">✨ Closest in meaning to “${escHtml(q)}”` +
+      `<button class="btn secondary" id="search-clear">✕ Clear</button></div>`;
+    $("search-clear").onclick = clearSearch;
+    if (!results.length) {
+      panel.insertAdjacentHTML("beforeend",
+        `<div id="empty-state">No tips matched “${escHtml(q)}”.</div>`);
+      return;
+    }
+    results.forEach(tip => {
+      const card = document.createElement("div");
+      card.className = "tip-card";
+      const pct = Math.round((tip.similarity || 0) * 100);
+      card.innerHTML = `
+        <div class="vote-col">
+          <button class="vote-btn up${tip.my_vote === 1 ? " on" : ""}" title="Upvote (saves to favorites)" aria-label="Upvote">▲</button>
+          <span class="vote-score">${tip.score}</span>
+          <button class="vote-btn down${tip.my_vote === -1 ? " on" : ""}" title="Downvote" aria-label="Downvote">▼</button>
+        </div>
+        <div class="tip-main">
+          <div class="tip-content">${escHtml(tip.content)}</div>
+          ${tip.tags.length ? `<div class="tip-tags">${tip.tags.map(t => `<span class="chip">${escHtml(t)}</span>`).join("")}</div>` : ""}
+        </div>
+        <span class="sim-badge" title="How close this tip is in meaning">${pct}%</span>`;
+      bindTipControls(card, tip);
+      panel.appendChild(card);
+    });
+  }
+
+  function clearSearch() {
+    searchActive = false;
+    $("search-results").style.display = "none";
+    renderCurrentView();
+  }
+
+  $("smart-search-btn").onclick = runSemanticSearch;
 
   // ── Add / Edit Tip modal ──────────────────────────────────────
   $("add-tip-btn").onclick = () => {
@@ -592,6 +693,30 @@
     loadSidebar();
     renderCurrentView();
     setTimeout(() => $("batch-overlay").classList.add("hidden"), 1200);
+  };
+
+  // AI tag suggestions (Gemini): fills tags for rows that don't have any yet.
+  $("batch-suggest-btn").onclick = async () => {
+    const empties = batchItems.filter(i => i.content.trim() && !i.tags.length);
+    if (!empties.length) { toast("Every tip already has tags — clear some to re-suggest."); return; }
+    const btn = $("batch-suggest-btn");
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = "Suggesting…";
+    $("batch-status").textContent = `Asking the AI to tag ${empties.length} tip${empties.length !== 1 ? "s" : ""}…`;
+    const res = await api("POST", "/api/llm/suggest-tags", { contents: empties.map(i => i.content.trim()) });
+    btn.disabled = false; btn.textContent = label;
+    if (res.error) { $("batch-status").textContent = ""; toast(res.error); return; }
+    let filled = 0;
+    (res.suggestions || []).forEach((sug, idx) => {
+      const item = empties[idx];
+      if (!item) return;
+      const tags = [];
+      if (sug.primary) tags.push(sug.primary);
+      (sug.secondary || []).forEach(t => { if (!tags.includes(t)) tags.push(t); });
+      if (tags.length) { item.tags = tags; filled++; }
+    });
+    renderBatchReview();
+    $("batch-status").textContent = `AI suggested tags for ${filled} tip${filled !== 1 ? "s" : ""}. Review and edit before importing.`;
   };
 
   // ── Import tags modal ─────────────────────────────────────────
@@ -809,9 +934,13 @@
     gViewport: null, gLabels: null, gNodes: null, gNodeLabels: null,
     cw: 0, ch: 0, dpr: 1, W: 0, H: 0,
     alpha: 0, transform: { x: 0, y: 0, k: 1 },
-    selected: null, expr: null, linkTargets: [], suggested: null,
+    selected: null, expr: null, defaultOp: "OR", linkTargets: [], suggested: null,
     visited: new Set(), prevSelected: null, focus: null, colorMap: {},
     clusters: [], clusterByTag: {}, legendRows: {},
+    // Network link mode: "tags" (shared-secondary-tag expression) or "related" (semantic
+    // neighbours). relatedK caps how many nearest-by-meaning links to draw. Persisted.
+    linkMode: (() => { try { return localStorage.getItem("netLinkMode") || "tags"; } catch (e) { return "tags"; } })(),
+    relatedK: 8,
   };
 
   const primaryTagOf = tip => tip.tags.find(t => tierOf(t) === "primary") || tip.tags[0] || null;
@@ -1002,7 +1131,7 @@
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, NET.cw, NET.ch);
     const sel = NET.selected;
-    if (sel == null || !NET.linkTargets.length) return;
+    if (sel == null || (!NET.linkTargets.length && NET.suggested == null)) return;
     ctx.setTransform(k * dpr, 0, 0, k * dpr, x * dpr, y * dpr);
     ctx.lineCap = "round";
     const A = NET.byId[sel];
@@ -1095,17 +1224,24 @@
     NET.selected = n.id;
     NET.visited.add(n.id);            // record the visit so it won't be re-suggested
     markSeen(n.id);                   // ...and persist it to the user's account
-    // Build a fresh tag expression from this tip's secondary tags.
-    // Default: every tag included, joined by OR (matches the old behaviour).
+    // Build a fresh tag expression from this tip's secondary tags. Every tag is included,
+    // joined by the last gate you chose (NET.defaultOp) so it persists across selections.
     const sec = n.tip.tags.filter(t => tierOf(t) === "secondary");
     NET.expr = {
       tags: sec,
-      ops: sec.slice(1).map(() => "OR"),  // one operator between each consecutive pair
+      ops: sec.slice(1).map(() => NET.defaultOp),  // one operator between each consecutive pair
       included: sec.map(() => true),
     };
     applySelectionHighlight();
     showCard(n.tip);
     updateExprHint();
+    // Semantic neighbours power both the meaning-mode gold suggestion and related-link mode.
+    const needsRelated = (suggestMode === "meaning" || NET.linkMode === "related") && embeddingsEnabled;
+    if (needsRelated && !relatedCache[n.id]) {
+      fetchRelated(n.id).then(() => {
+        if (NET.selected === n.id) { applySelectionHighlight(); updateExprHint(); }
+      });
+    }
   }
 
   // True if `candidateTags` satisfies the current tag expression. Included tags are
@@ -1126,12 +1262,24 @@
   // suggested next tip, dim the rest, and redraw.
   function applySelectionHighlight() {
     const selId = NET.selected;
-    const targets = NET.nodes
-      .filter(m => m.id !== selId && exprMatches(m.tip.tags))
-      .map(m => m.id);
+    let targets;
+    if (NET.linkMode === "related" && embeddingsEnabled) {
+      // Links are this tip's nearest neighbours by meaning (top relatedK that are on screen).
+      const rel = (relatedCache[selId] || []).filter(r => NET.byId[r.tip_id] && r.tip_id !== selId);
+      targets = rel.slice(0, NET.relatedK).map(r => r.tip_id);
+      const note = $("net-card-related-note");
+      if (note) note.textContent = relatedCache[selId]
+        ? `Linked to the ${targets.length} closest tip${targets.length !== 1 ? "s" : ""} by meaning.`
+        : "Finding the closest tips by meaning…";
+    } else {
+      targets = NET.nodes
+        .filter(m => m.id !== selId && exprMatches(m.tip.tags))
+        .map(m => m.id);
+    }
     NET.linkTargets = targets;
-    NET.suggested = pickSuggested(targets);
+    NET.suggested = pickSuggestedFor(selId, targets);
     const keep = new Set([selId, ...targets]);
+    if (NET.suggested != null) keep.add(NET.suggested);  // meaning-mode pick may be off the tag-links
     NET.nodes.forEach(m => {
       m.el.classList.toggle("dim", !keep.has(m.id));
       m.el.classList.toggle("sel", m.id === selId);
@@ -1187,6 +1335,35 @@
     return best;
   }
 
+  // Fetch (and cache) the semantic neighbours of a tip. The server computes these from the
+  // stored vectors, so it's a cheap lookup with no model call.
+  async function fetchRelated(id) {
+    if (relatedCache[id]) return relatedCache[id];
+    const res = await api("GET", `/api/tips/${id}/related?k=30`);
+    relatedCache[id] = (res && res.related) || [];
+    return relatedCache[id];
+  }
+
+  // From a ranked related list, pick the next tip to suggest: most-similar first, but only
+  // among tips currently loaded (respects tag/favourite filters) and not already visited.
+  // Falls back gracefully so we always move forward rather than getting stuck.
+  function pickFromRelated(currentId) {
+    const rel = (relatedCache[currentId] || []).filter(r => NET.byId[r.tip_id] && r.tip_id !== currentId);
+    let pool = rel.filter(r => !NET.visited.has(r.tip_id));
+    if (!pool.length) pool = rel.filter(r => r.tip_id !== NET.prevSelected && r.tip_id !== currentId);
+    if (!pool.length) pool = rel;
+    return pool.length ? pool[0].tip_id : null;
+  }
+
+  // Choose the suggested tip using whichever engine is active. In "meaning" mode we use the
+  // semantic neighbours (if already fetched); otherwise the tag-overlap ranking.
+  function pickSuggestedFor(selId, targets) {
+    if (suggestMode === "meaning" && embeddingsEnabled && relatedCache[selId]) {
+      return pickFromRelated(selId);
+    }
+    return pickSuggested(targets);
+  }
+
   function clearNetSelection() {
     NET.selected = null;
     NET.expr = null;
@@ -1210,10 +1387,38 @@
       // upvoting changes the favourites profile → re-pick the suggested tip
       if (NET.selected != null) { applySelectionHighlight(); updateExprHint(); }
     });
+    renderLinkModeUI();
     renderTagExpr();
     $("net-card").classList.remove("hidden");
   }
   function hideCard() { $("net-card").classList.add("hidden"); }
+
+  // ── Link mode: tag-expression links vs semantic "related" links ──
+  function renderLinkModeUI() {
+    const wrap = $("net-card-linkmode");
+    if (!wrap) return;
+    wrap.style.display = embeddingsEnabled ? "flex" : "none";
+    const related = NET.linkMode === "related" && embeddingsEnabled;
+    $("linkmode-tags").classList.toggle("active", !related);
+    $("linkmode-related").classList.toggle("active", related);
+    // The secondary-tag expression builder only makes sense in tag mode.
+    $("net-card-tags-label").style.display = related ? "none" : "";
+    $("net-card-tags").style.display = related ? "none" : "";
+    $("net-card-related-note").style.display = related ? "" : "none";
+  }
+
+  function setLinkMode(mode) {
+    NET.linkMode = mode;
+    try { localStorage.setItem("netLinkMode", mode); } catch (e) {}
+    renderLinkModeUI();
+    if (NET.selected == null) return;
+    const id = NET.selected;
+    if (mode === "related" && embeddingsEnabled && !relatedCache[id]) {
+      fetchRelated(id).then(() => { if (NET.selected === id) { applySelectionHighlight(); updateExprHint(); } });
+    } else {
+      applySelectionHighlight(); updateExprHint();
+    }
+  }
 
   // Render the secondary-tag expression: a chip per tag (click to include/leave out)
   // with an OR/AND button between each (click to toggle). Recomputes the links live.
@@ -1234,6 +1439,7 @@
         opBtn.onclick = e => {
           e.stopPropagation();
           ops[i - 1] = ops[i - 1] === "OR" ? "AND" : "OR";
+          NET.defaultOp = ops[i - 1];   // remember the gate for future selections
           renderTagExpr(); applySelectionHighlight(); updateExprHint();
         };
         wrap.appendChild(opBtn);
@@ -1264,6 +1470,15 @@
   }
 
   function updateExprHint() {
+    if (NET.linkMode === "related" && embeddingsEnabled) {
+      const c = NET.linkTargets.length;
+      const sug = NET.suggested != null
+        ? ` · <span style="color:#ffcf33;font-weight:700">●</span> next suggested tip`
+        : "";
+      $("net-hint").innerHTML =
+        `Linked to the <b>${c}</b> closest tip${c !== 1 ? "s" : ""} <b>by meaning</b>${sug} · switch to <b>Tags</b> to combine secondary tags`;
+      return;
+    }
     const c = NET.linkTargets.length;
     const expr = describeExpr();
     if (!expr) { $("net-hint").innerHTML = `Pick at least one tag to show links`; return; }
@@ -1454,13 +1669,18 @@
 
   // Work out the next suggested tip from the current one (default OR over its secondary
   // tags) using the shared ranking + memory, and update the nav buttons.
-  function computeCardNext() {
+  async function computeCardNext() {
     const tip = NET.byId[cardCurrent].tip;
-    const sec = tip.tags.filter(t => tierOf(t) === "secondary");
-    NET.expr = { tags: sec, ops: sec.slice(1).map(() => "OR"), included: sec.map(() => true) };
-    NET.selected = cardCurrent;
-    const targets = NET.nodes.filter(m => m.id !== cardCurrent && exprMatches(m.tip.tags)).map(m => m.id);
-    cardNextId = pickSuggested(targets);
+    if (suggestMode === "meaning" && embeddingsEnabled) {
+      await fetchRelated(cardCurrent);             // semantic next: most similar unseen tip
+      cardNextId = pickFromRelated(cardCurrent);
+    } else {
+      const sec = tip.tags.filter(t => tierOf(t) === "secondary");
+      NET.expr = { tags: sec, ops: sec.slice(1).map(() => "OR"), included: sec.map(() => true) };
+      NET.selected = cardCurrent;
+      const targets = NET.nodes.filter(m => m.id !== cardCurrent && exprMatches(m.tip.tags)).map(m => m.id);
+      cardNextId = pickSuggested(targets);
+    }
     $("cv-next").disabled = cardNextId == null;
     $("cv-prev").disabled = cardBackStack.length === 0;
   }
@@ -1510,22 +1730,27 @@
     $("view-list").classList.toggle("active", v === "list");
     $("view-network").classList.toggle("active", v === "network");
     $("view-cards").classList.toggle("active", v === "cards");
+    $("view-advise").classList.toggle("active", v === "advise");
     renderCurrentView();
   }
 
   // Decide which panel to show and render it. In Network/Cards views the favourites
   // filter swaps the graph/sequence for a vertical, scrollable list of favourite cards.
   function renderCurrentView() {
+    searchActive = false;                 // any normal view render leaves semantic-search mode
+    $("search-results").style.display = "none";
     const v = currentView;
     const favMode = favoritesOnly && (v === "network" || v === "cards");
     $("tip-list").style.display = v === "list" ? "flex" : "none";
     $("network-view").style.display = (v === "network" && !favMode) ? "block" : "none";
     $("card-view").style.display = (v === "cards" && !favMode) ? "flex" : "none";
+    $("advise-view").style.display = v === "advise" ? "flex" : "none";
     $("fav-list").style.display = favMode ? "flex" : "none";
     if (v !== "network" || favMode) { stopSim(); $("net-tooltip").style.display = "none"; }
     if (favMode) renderFavList();
     else if (v === "network") buildNetwork();
     else if (v === "cards") enterCardView();
+    else if (v === "advise") enterAdviseView();
     else loadTips(activeTags.join(","));
   }
 
@@ -1563,13 +1788,68 @@
     });
   }
 
+  // ════════════════ Ask-for-advice view (RAG) ═══════════════════
+  // The user describes a situation; the server retrieves the most relevant tips by meaning
+  // and Gemini writes advice grounded in them. We then show which tips it drew on.
+  function enterAdviseView() {
+    const input = $("advise-input");
+    if (input && !input.value) setTimeout(() => input.focus(), 0);
+  }
+
+  async function runAdvise() {
+    const situation = $("advise-input").value.trim();
+    if (!situation) { $("advise-input").focus(); return; }
+    const btn = $("advise-btn"), out = $("advise-result");
+    btn.disabled = true;
+    out.innerHTML = `<div class="advise-thinking">${SPINNER}<span>Reading your tips and thinking it through…</span></div>`;
+    const res = await api("POST", "/api/advise", { situation });
+    btn.disabled = false;
+    if (res.error) { out.innerHTML = ERR(res.error); return; }
+    renderAdvice(res);
+  }
+
+  function renderAdvice(res) {
+    const out = $("advise-result");
+    const used = new Set(res.used || []);
+    const tips = res.tips || [];
+    // Prefer the tips the model cited; if it cited none, show all the retrieved ones.
+    const drawn = tips.filter(t => used.has(t.id));
+    const list = drawn.length ? drawn : tips;
+    out.innerHTML =
+      `<div class="advise-answer">${escHtml(res.answer || "").replace(/\n/g, "<br>")}</div>` +
+      (list.length ? `<div class="advise-source-label">Drawn from these tips</div><div class="advise-tips"></div>` : "");
+    const wrap = out.querySelector(".advise-tips");
+    if (!wrap) return;
+    list.forEach(tip => {
+      const card = document.createElement("div");
+      card.className = "tip-card";
+      const pct = tip.similarity != null ? `<span class="sim-badge">${Math.round(tip.similarity * 100)}%</span>` : "";
+      card.innerHTML = `
+        <div class="tip-main">
+          <div class="tip-content">${escHtml(tip.content)}</div>
+          ${tip.tags.length ? `<div class="tip-tags">${tip.tags.map(t => `<span class="chip">${escHtml(t)}</span>`).join("")}</div>` : ""}
+        </div>${pct}`;
+      wrap.appendChild(card);
+    });
+  }
+
+  $("advise-btn").onclick = runAdvise;
+  $("advise-input").onkeydown = e => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) runAdvise();  // ⌘/Ctrl+Enter to submit
+  };
+
   // ── Init ──────────────────────────────────────────────────────
   $("view-list").onclick = () => setView("list");
   $("view-network").onclick = () => setView("network");
   $("view-cards").onclick = () => setView("cards");
+  $("view-advise").onclick = () => setView("advise");
   $("cv-next").onclick = cardNext;
   $("cv-prev").onclick = cardPrev;
   $("cv-restart").onclick = cardRestart;
+  $("net-suggest-mode").onclick = flipSuggestMode;
+  $("cv-suggest-mode").onclick = flipSuggestMode;
+  $("linkmode-tags").onclick = () => setLinkMode("tags");
+  $("linkmode-related").onclick = () => setLinkMode("related");
   $("net-reset").onclick = resetView;
   $("net-relayout").onclick = () => { scatterNodes(); startSim(); };
   $("net-clear-history").onclick = async () => {

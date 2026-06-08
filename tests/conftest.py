@@ -18,6 +18,8 @@ def app_module(tmp_path, monkeypatch):
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "")
     monkeypatch.setenv("ADMIN_PASSWORD", "admin")
     monkeypatch.setenv("ADMIN_PASSWORD_HASH", "")   # force hashing of ADMIN_PASSWORD above
+    monkeypatch.setenv("GEMINI_API_KEY", "")        # disable real LLM calls in tests
+    monkeypatch.setenv("GOOGLE_AI_API_KEY", "")     # (llm.py accepts either name)
     import app
     importlib.reload(app)   # re-read env, reset module state (rate limiter, hash, routes)
     app.init_db()
