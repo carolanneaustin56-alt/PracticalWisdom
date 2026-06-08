@@ -147,6 +147,54 @@ def advise(situation, tips):
     return {"answer": answer, "used": used_ids}
 
 
+def reflect_on_favorites(tips):
+    """Draw a warm, personal reflection from the tips a user has favourited.
+
+    `tips` is a list of {"content", "tags"}. Returns
+    {"themes": [{"title", "detail"}...], "resonance": str, "actions": [str, ...]}.
+    Reads the set as a whole to infer — gently, never clinically — what the person values
+    and how they might act on it. Raises LLMError on failure.
+    """
+    lines = []
+    for i, t in enumerate(tips):
+        tags = t.get("tags") or []
+        suffix = (" [" + ", ".join(tags) + "]") if tags else ""
+        lines.append("%d. %s%s" % (i + 1, t["content"], suffix))
+    prompt = (
+        "A person has saved the following 'practical wisdom' tips as their favourites. Reading "
+        "them as a set, reflect gently and warmly on what these choices suggest about this person "
+        "— what they seem to value and what they might be working toward. Be encouraging, specific "
+        "and humane; never clinical, presumptuous, or like a diagnosis. Address them directly as "
+        "'you'.\n\n"
+        "Return JSON with:\n"
+        '  "themes": 3-5 items, each {"title": short label, "detail": one warm sentence}\n'
+        '  "resonance": one short paragraph on what likely makes these tips resonate for them\n'
+        '  "actions": 3-5 small, concrete things they could try this week to live these ideas\n\n'
+        "Favourite tips:\n%s"
+    ) % "\n".join(lines)
+    parsed = _call_gemini(prompt)
+    if not isinstance(parsed, dict):
+        raise LLMError("unexpected response shape")
+    themes = []
+    for it in (parsed.get("themes") or []):
+        if isinstance(it, dict) and (it.get("title") or it.get("detail")):
+            themes.append({"title": (it.get("title") or "").strip(),
+                           "detail": (it.get("detail") or "").strip()})
+    # Actions may come back as plain strings or as {title, detail}-style objects — normalise
+    # both to a single readable string so the front-end can render them uniformly.
+    actions = []
+    for a in (parsed.get("actions") or []):
+        if isinstance(a, dict):
+            title = (a.get("title") or "").strip()
+            detail = (a.get("detail") or a.get("action") or a.get("text") or "").strip()
+            text = ((title + " — " + detail) if title and detail else (title or detail)).strip()
+        else:
+            text = str(a).strip() if a else ""
+        if text:
+            actions.append(text)
+    return {"themes": themes, "resonance": (parsed.get("resonance") or "").strip(), "actions": actions}
+
+
 def suggest_tags_batch(contents, primary_tags, secondary_tags, max_secondary=3):
     """Suggest tags for each tip, chosen ONLY from the allowed lists.
 

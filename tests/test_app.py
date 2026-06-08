@@ -230,3 +230,63 @@ def test_suggest_tags_endpoint_with_mock(client, app_module, monkeypatch):
                     headers={"X-CSRF-Token": token})
     assert r.status_code == 200
     assert r.get_json()["suggestions"] == [{"primary": "moral", "secondary": ["courage"]}]
+
+
+# ── Favourites insights (AI reflection on saved tips) ──
+def _favorite(client, app_module, token, n, uid):
+    """Create n tips and have the logged-in user upvote (favourite) each. Returns their ids."""
+    ids = []
+    for i in range(n):
+        tid = add_tip(app_module, "Fav tip %d" % i, ["moral"])
+        client.post(f"/api/tips/{tid}/vote", json={"value": 1}, headers={"X-CSRF-Token": token})
+        ids.append(tid)
+    return ids
+
+
+def test_reflect_on_favorites_parsing(monkeypatch):
+    import llm
+    monkeypatch.setattr(llm, "_call_gemini", lambda p: {
+        "themes": [{"title": "Growth", "detail": "you keep learning"}, {"bad": 1}],
+        "resonance": "  You value steady progress.  ",
+        "actions": ["Walk daily", "", None, "Journal"],
+    })
+    out = llm.reflect_on_favorites([{"content": "c", "tags": ["t"]}])
+    assert out["resonance"] == "You value steady progress."
+    assert out["themes"] == [{"title": "Growth", "detail": "you keep learning"}]  # malformed item dropped
+    assert out["actions"] == ["Walk daily", "Journal"]                            # blanks dropped
+
+
+def test_favorites_insights_requires_login(client):
+    r = client.post("/api/favorites/insights", json={}, headers={"X-CSRF-Token": get_csrf(client)})
+    assert r.status_code == 401
+
+
+def test_favorites_insights_503_without_key(client, app_module):
+    uid = make_user(app_module)
+    token = login_user(client, uid)
+    r = client.post("/api/favorites/insights", json={}, headers={"X-CSRF-Token": token})
+    assert r.status_code == 503  # no key configured in tests
+
+
+def test_favorites_insights_needs_three(client, app_module, monkeypatch):
+    monkeypatch.setattr(app_module.llm, "is_enabled", lambda: True)
+    uid = make_user(app_module)
+    token = login_user(client, uid)
+    _favorite(client, app_module, token, 2, uid)   # only two favourites
+    r = client.post("/api/favorites/insights", json={}, headers={"X-CSRF-Token": token})
+    assert r.status_code == 400
+
+
+def test_favorites_insights_success(client, app_module, monkeypatch):
+    monkeypatch.setattr(app_module.llm, "is_enabled", lambda: True)
+    monkeypatch.setattr(app_module.llm, "reflect_on_favorites",
+                        lambda tips: {"themes": [{"title": "Growth", "detail": "x"}],
+                                      "resonance": "You value growth.", "actions": ["Do one small thing"]})
+    uid = make_user(app_module)
+    token = login_user(client, uid)
+    _favorite(client, app_module, token, 3, uid)
+    r = client.post("/api/favorites/insights", json={}, headers={"X-CSRF-Token": token})
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data["count"] == 3
+    assert data["insight"]["resonance"] == "You value growth."

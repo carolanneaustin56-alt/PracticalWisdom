@@ -756,6 +756,33 @@ def vote_tip(tip_id):
         return jsonify(tip_with_tags(conn, tip_id))
 
 
+@app.post("/api/favorites/insights")
+def favorites_insights():
+    """Reflect on the signed-in user's favourite tips: themes, what resonates, next steps.
+
+    Favourites = the user's upvoted tips. Needs a signed-in user and at least 3 favourites
+    (so there's a pattern to read). Returns {"count": n, "insight": {...}}.
+    """
+    uid = current_user_id()
+    if not uid:
+        return jsonify({"error": "Sign in to reflect on your favourites."}), 401
+    if not llm.is_enabled():
+        return jsonify({"error": "This needs an AI key (set GEMINI_API_KEY)."}), 503
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT t.id FROM tips t JOIN votes v ON v.tip_id = t.id
+               WHERE v.user_id = ? AND v.value = 1
+               ORDER BY t.id DESC LIMIT 80""", (uid,)).fetchall()
+        tips = [tip_with_tags(conn, r["id"]) for r in rows]
+    if len(tips) < 3:
+        return jsonify({"error": "Save at least 3 favourites first, so there's a pattern to read."}), 400
+    try:
+        insight = llm.reflect_on_favorites([{"content": t["content"], "tags": t["tags"]} for t in tips])
+    except llm.LLMError as e:
+        return jsonify({"error": "Reflection failed: %s" % e}), 502
+    return jsonify({"count": len(tips), "insight": insight})
+
+
 @app.get("/api/seen")
 def get_seen():
     """Tip ids the current user has already visited (empty when not signed in)."""

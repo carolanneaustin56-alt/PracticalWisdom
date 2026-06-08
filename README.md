@@ -112,6 +112,11 @@ All four are open to every visitor (no admin needed) and only appear when a Gemi
 (`/api/me` exposes `embeddings_enabled`). `related` uses the stored vectors only — no model call;
 `search` and `advise` embed the query/situation, and `advise` also generates the written answer.
 
+**Favorites reflection** (`POST /api/favorites/insights`) — a separate, text-generation-only
+feature (no embeddings). For a signed-in user with 3+ favourites, the **✨ Reflect on these**
+button in their favourites list asks Gemini to read the saved tips as a set and reflect warmly on
+the threads running through them, what likely makes them resonate, and small steps to live them.
+
 ## Tests
 
 ```bash

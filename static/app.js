@@ -1763,7 +1763,12 @@
     list.innerHTML = SPINNER;
     const tips = await api("GET", "/api/tips?" + params.join("&"));
     if (!Array.isArray(tips)) { list.innerHTML = ERR("Couldn't load favorites."); return; }
-    list.innerHTML = `<div class="fav-list-head">★ Your favorites${tips.length ? " (" + tips.length + ")" : ""}</div>`;
+    const canReflect = embeddingsEnabled && tips.length >= 3;
+    list.innerHTML =
+      `<div class="fav-list-head">★ Your favorites${tips.length ? " (" + tips.length + ")" : ""}` +
+      (canReflect ? `<button class="btn secondary" id="fav-reflect-btn" title="Use AI to reflect on what your saved tips say about you">✨ Reflect on these</button>` : "") +
+      `</div>`;
+    if (canReflect) $("fav-reflect-btn").onclick = openFavInsights;
     if (!tips.length) {
       list.insertAdjacentHTML("beforeend",
         `<div id="empty-state">No favorites yet — upvote a tip (▲) to save it.</div>`);
@@ -1837,6 +1842,39 @@
   $("advise-input").onkeydown = e => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) runAdvise();  // ⌘/Ctrl+Enter to submit
   };
+
+  // ════════════════ Favorites insights ══════════════════════════
+  // Reflect on the signed-in user's favourite tips: themes, what resonates, and small steps.
+  async function openFavInsights() {
+    $("insights-regen").style.display = "none";
+    $("insights-overlay").classList.remove("hidden");
+    await runFavInsights();
+  }
+
+  async function runFavInsights() {
+    const body = $("insights-body");
+    $("insights-regen").style.display = "none";
+    body.innerHTML = `<div class="advise-thinking">${SPINNER}<span>Reading your favourites and reflecting…</span></div>`;
+    const res = await api("POST", "/api/favorites/insights", {});
+    if (res.error) { body.innerHTML = ERR(res.error); if (!res._network) $("insights-regen").style.display = ""; return; }
+    renderFavInsights(res.insight, res.count);
+    $("insights-regen").style.display = "";
+  }
+
+  function renderFavInsights(ins, count) {
+    const themes = (ins.themes || []).map(t =>
+      `<li><b>${escHtml(t.title)}</b>${t.detail ? ` — ${escHtml(t.detail)}` : ""}</li>`).join("");
+    const actions = (ins.actions || []).map(a => `<li>${escHtml(a)}</li>`).join("");
+    $("insights-body").innerHTML =
+      `<div class="insights-count">Reading across your ${count} favourite${count !== 1 ? "s" : ""}</div>` +
+      (ins.resonance ? `<div class="advise-answer">${escHtml(ins.resonance).replace(/\n/g, "<br>")}</div>` : "") +
+      (themes ? `<div class="insights-label">Threads running through your picks</div><ul class="insights-list">${themes}</ul>` : "") +
+      (actions ? `<div class="insights-label">Small steps to live them this week</div><ul class="insights-list">${actions}</ul>` : "");
+  }
+
+  $("insights-close").onclick = () => $("insights-overlay").classList.add("hidden");
+  $("insights-regen").onclick = runFavInsights;
+  dismissOnBackdrop("insights-overlay");
 
   // ── Init ──────────────────────────────────────────────────────
   $("view-list").onclick = () => setView("list");

@@ -498,6 +498,18 @@
   }
   .advise-tips { display: flex; flex-direction: column; gap: 8px; }
 
+  /* ── Favorites insights modal ── */
+  .insights-sub { font-size: 0.82rem; color: #6b6f63; line-height: 1.5; margin: -2px 0 10px; }
+  #insights-body { display: flex; flex-direction: column; gap: 6px; }
+  .insights-count { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em; color: #8a8f80; }
+  .insights-label {
+    font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em; color: #5a8a2a;
+    font-weight: 600; margin-top: 12px;
+  }
+  .insights-list { margin: 6px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 7px; }
+  .insights-list li { font-size: 0.92rem; line-height: 1.5; color: #2c3322; }
+  .fav-list-head #fav-reflect-btn { text-transform: none; letter-spacing: 0; }
+
   /* ── Semantic search results (vertical scroll, shown over any view) ── */
   #search-results {
     flex: 1; display: none; flex-direction: column; gap: 10px;
@@ -653,6 +665,9 @@
   [data-theme="dark"] .advise-sub { color: #98a0ab; }
   [data-theme="dark"] #advise-input { background: #1c1f25; border-color: #2c313a; color: #e8eaee; }
   [data-theme="dark"] .advise-answer { background: #1c1f25; border-color: #2c313a; border-left-color: #6fa83e; color: #dfe3e9; }
+  [data-theme="dark"] .insights-sub { color: #98a0ab; }
+  [data-theme="dark"] .insights-list li { color: #dfe3e9; }
+  [data-theme="dark"] .insights-label { color: #8fc35a; }
   [data-theme="dark"] #cv-card { background: #1c1f25; border-color: #2c313a; box-shadow: 0 6px 26px rgba(0,0,0,0.4); }
   [data-theme="dark"] #cv-content { color: #e8eaee; }
   [data-theme="dark"] #cv-anecdote { color: #aab0ba; border-left-color: #33471d; }
