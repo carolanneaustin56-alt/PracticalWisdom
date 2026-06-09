@@ -774,10 +774,12 @@ def favorites_insights():
                WHERE v.user_id = ? AND v.value = 1
                ORDER BY t.id DESC LIMIT 80""", (uid,)).fetchall()
         tips = [tip_with_tags(conn, r["id"]) for r in rows]
+        library_size = conn.execute("SELECT COUNT(*) AS n FROM tips").fetchone()["n"]
     if len(tips) < 3:
         return jsonify({"error": "Save at least 3 favourites first, so there's a pattern to read."}), 400
     try:
-        insight = llm.reflect_on_favorites([{"content": t["content"], "tags": t["tags"]} for t in tips])
+        insight = llm.reflect_on_favorites(
+            [{"content": t["content"], "tags": t["tags"]} for t in tips], library_size=library_size)
     except llm.LLMError as e:
         return jsonify({"error": "Reflection failed: %s" % e}), 502
     return jsonify({"count": len(tips), "insight": insight})

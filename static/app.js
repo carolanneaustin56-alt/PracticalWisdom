@@ -1862,14 +1862,13 @@
   }
 
   function renderFavInsights(ins, count) {
-    const themes = (ins.themes || []).map(t =>
-      `<li><b>${escHtml(t.title)}</b>${t.detail ? ` — ${escHtml(t.detail)}` : ""}</li>`).join("");
-    const actions = (ins.actions || []).map(a => `<li>${escHtml(a)}</li>`).join("");
+    const questions = (ins.questions || []).map(q => `<li>${escHtml(q)}</li>`).join("");
+    const experiments = (ins.experiments || []).map(x => `<li>${escHtml(x)}</li>`).join("");
     $("insights-body").innerHTML =
-      `<div class="insights-count">Reading across your ${count} favourite${count !== 1 ? "s" : ""}</div>` +
-      (ins.resonance ? `<div class="advise-answer">${escHtml(ins.resonance).replace(/\n/g, "<br>")}</div>` : "") +
-      (themes ? `<div class="insights-label">Threads running through your picks</div><ul class="insights-list">${themes}</ul>` : "") +
-      (actions ? `<div class="insights-label">Small steps to live them this week</div><ul class="insights-list">${actions}</ul>` : "");
+      `<div class="insights-count">From the ${count} tip${count !== 1 ? "s" : ""} you chose out of the whole library</div>` +
+      (ins.pattern ? `<div class="advise-answer">${escHtml(ins.pattern).replace(/\n/g, "<br>")}</div>` : "") +
+      (questions ? `<div class="insights-label">Questions to sit with</div><ul class="insights-list">${questions}</ul>` : "") +
+      (experiments ? `<div class="insights-label">Experiments to try this week</div><ul class="insights-list">${experiments}</ul>` : "");
   }
 
   $("insights-close").onclick = () => $("insights-overlay").classList.add("hidden");

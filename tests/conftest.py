@@ -18,10 +18,13 @@ def app_module(tmp_path, monkeypatch):
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "")
     monkeypatch.setenv("ADMIN_PASSWORD", "admin")
     monkeypatch.setenv("ADMIN_PASSWORD_HASH", "")   # force hashing of ADMIN_PASSWORD above
-    monkeypatch.setenv("GEMINI_API_KEY", "")        # disable real LLM calls in tests
-    monkeypatch.setenv("GOOGLE_AI_API_KEY", "")     # (llm.py accepts either name)
+    monkeypatch.setenv("GROQ_API_KEY", "")          # disable real text-generation calls in tests
     import app
     importlib.reload(app)   # re-read env, reset module state (rate limiter, hash, routes)
+    # fastembed is installed, so embeddings.is_enabled() is True by default — force it OFF so the
+    # "disabled" paths are tested and no real model loads. Tests that want it on re-enable + mock.
+    import embeddings
+    monkeypatch.setattr(embeddings, "is_enabled", lambda: False)
     app.init_db()
     return app
 

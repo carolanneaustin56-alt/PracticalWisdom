@@ -1,6 +1,6 @@
 """Tests for the semantic-embeddings foundation.
 
-No real network calls: llm.embed_texts is replaced with a deterministic fake so that
+No real model loads: embeddings.embed_texts is replaced with a deterministic fake so that
 identical text always yields the identical vector (cosine 1.0), which is all we need to
 exercise storage, staleness detection, rebuild, search, and neighbours.
 """
@@ -8,7 +8,7 @@ import hashlib
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
-def fake_embed(texts, task_type="SEMANTIC_SIMILARITY"):
+def fake_embed(texts):
     """16-dim deterministic 'embedding': same text -> same vector, different text -> different."""
     out = []
     for t in texts:
@@ -18,9 +18,10 @@ def fake_embed(texts, task_type="SEMANTIC_SIMILARITY"):
 
 
 def enable_embeddings(monkeypatch):
-    import llm
-    monkeypatch.setattr(llm, "is_enabled", lambda: True)
-    monkeypatch.setattr(llm, "embed_texts", fake_embed)
+    """Turn the (local) embeddings backend on with a deterministic fake — no model loads."""
+    import embeddings
+    monkeypatch.setattr(embeddings, "is_enabled", lambda: True)
+    monkeypatch.setattr(embeddings, "embed_texts", fake_embed)
 
 
 def get_csrf(client):
@@ -176,7 +177,7 @@ def test_deleting_tip_cascades_embedding(client, app_module, monkeypatch):
 # ── Ask-for-advice (RAG) ─────────────────────────────────────────────────────
 def test_llm_advise_maps_used_numbers(monkeypatch):
     import llm
-    monkeypatch.setattr(llm, "_call_gemini", lambda prompt: {"answer": "do it", "used": [1, 3, 99]})
+    monkeypatch.setattr(llm, "_complete_json", lambda prompt: {"answer": "do it", "used": [1, 3, 99]})
     out = llm.advise("help me", [{"id": 10, "content": "a"}, {"id": 20, "content": "b"}, {"id": 30, "content": "c"}])
     assert out["answer"] == "do it"
     assert out["used"] == [10, 30]   # 1->10, 3->30; out-of-range 99 dropped

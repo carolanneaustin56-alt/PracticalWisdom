@@ -42,21 +42,24 @@ ADMIN_PASSWORD_HASH=pbkdf2:sha256:...
 # Set to 1 in production (HTTPS) so the session cookie is sent only over HTTPS.
 COOKIE_SECURE=
 
-# Optional: AI tag suggestions in the batch importer (Google AI Studio / Gemini, free tier).
-# Get a free key at https://aistudio.google.com/apikey . Without it the "Suggest tags"
-# button just says it's not configured; everything else works as normal.
-GEMINI_API_KEY=
-# GEMINI_MODEL=gemini-2.5-flash            # optional: text-generation model (tag suggestions)
-# GEMINI_EMBED_MODEL=gemini-embedding-001  # optional: embedding model (semantic search)
-# GEMINI_EMBED_DIM=768                     # optional: embedding vector size
+# Optional: AI text features (tag suggestions, the advice assistant, favourites reflection)
+# run on Groq — fast and with a generous free tier. Get a key at https://console.groq.com/keys
+# Without it those buttons just say they're not configured; everything else works as normal.
+GROQ_API_KEY=
+# GROQ_MODEL=llama-3.3-70b-versatile        # optional: text-generation model override
 ```
+
+> **Embeddings** (semantic search, related-links, advice retrieval) run on a **small local
+> model** via `fastembed` — no API key, no quota, fully private. It downloads once (~130MB)
+> on first use and is cached. Override with `EMBED_MODEL` if you like (default
+> `BAAI/bge-small-en-v1.5`, 384 dims).
 
 ## Project layout
 
 ```
 app.py                 Flask app: routes, auth, CSRF, migrations runner
-llm.py                 optional Gemini helpers (tag suggestions + text embeddings)
-embeddings.py          semantic-embeddings foundation (search / similarity)
+llm.py                 optional text-generation helpers (Groq): tags, advice, reflection
+embeddings.py          local semantic-embeddings foundation (fastembed): search / similarity
 templates/index.html   page structure only (links to the static files)
 static/styles.css      all styles
 static/app.js          all front-end logic
@@ -78,12 +81,13 @@ migrations/002_add_something.sql
 
 ## Semantic embeddings (foundation for meaning-based features)
 
-When a Gemini key is set, each tip can be turned into an *embedding* — a vector that captures
-its meaning — stored in the `tip_embeddings` table. This powers features that tag-matching
-can't: searching by meaning, a smarter "next suggested tip", and "related tips" links.
+Each tip is turned into an *embedding* — a vector that captures its meaning — stored in the
+`tip_embeddings` table. Embeddings are computed by a **small local model** (`fastembed`, no API
+key), so this works offline and for free. It powers features that tag-matching can't: searching
+by meaning, a smarter "next suggested tip", and "related tips" links.
 
 - **Self-maintaining:** adding/editing a tip (or a batch import) embeds it automatically,
-  best-effort — an API hiccup never blocks the write; the tip is just picked up on the next rebuild.
+  best-effort — a hiccup never blocks the write; the tip is just picked up on the next rebuild.
 - **Backfill / repair:** an admin can rebuild the whole index. It only (re)embeds tips that are
   missing or whose text changed, so it's cheap to re-run.
 
@@ -108,14 +112,15 @@ needed). That one file is the place to add semantic search, the recommender, or 
 | **Related-tip links** — a selected node links to its nearest tips by meaning (`Links by: Meaning`) | Network | `GET /api/tips/<id>/related` |
 | **Ask for advice** (RAG) — describe a situation, get advice grounded in the most relevant tips, with citations | `Ask` view | `POST /api/advise` |
 
-All four are open to every visitor (no admin needed) and only appear when a Gemini key is set
-(`/api/me` exposes `embeddings_enabled`). `related` uses the stored vectors only — no model call;
-`search` and `advise` embed the query/situation, and `advise` also generates the written answer.
+All four are open to every visitor (no admin needed). The three embedding features need only the
+local model (always available once `fastembed` is installed); **Ask for advice** also needs a
+Groq key for the written answer (`/api/me` exposes `embeddings_enabled` and `llm_enabled`).
+`related` reads stored vectors only; `search`/`advise` embed the query/situation locally.
 
-**Favorites reflection** (`POST /api/favorites/insights`) — a separate, text-generation-only
-feature (no embeddings). For a signed-in user with 3+ favourites, the **✨ Reflect on these**
-button in their favourites list asks Gemini to read the saved tips as a set and reflect warmly on
-the threads running through them, what likely makes them resonate, and small steps to live them.
+**Favorites reflection** (`POST /api/favorites/insights`) — a separate, text-generation feature
+(Groq, no embeddings). For a signed-in user with 3+ favourites, the **✨ Reflect on these** button
+in their favourites list asks the model to read the saved tips as a set and reflect warmly on the
+threads running through them, what likely makes them resonate, and small steps to live them.
 
 ## Tests
 

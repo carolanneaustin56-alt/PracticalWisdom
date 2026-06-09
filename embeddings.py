@@ -5,29 +5,72 @@ text: two tips that say similar things get vectors that point in similar directi
 every tip has one, we can do things tag-matching can't — semantic search ("find tips about
 staying calm"), a smarter "next suggested tip", and "these two tips are related" links.
 
+Embeddings run on a small model **locally** via `fastembed` (no API key, no quota, fully
+private). This is deliberately separate from llm.py (text generation, which uses Groq): the
+two capabilities have different providers, so each degrades on its own.
+
 Design notes:
-  * Vectors are produced by Gemini's embedding model (see llm.embed_texts) and stored in the
-    `tip_embeddings` table as packed float32 BLOBs. We L2-normalise before storing, so the
-    cosine similarity between two tips is simply their dot product (fast, no extra maths).
+  * Vectors are stored in the `tip_embeddings` table as packed float32 BLOBs, L2-normalised so
+    cosine similarity is just a dot product (fast, no extra maths).
   * With a few hundred tips, a brute-force scan in pure Python is microseconds — no vector
-    database or numpy needed. If the collection grows into the tens of thousands, this is the
-    one spot to swap in an approximate-nearest-neighbour index.
-  * Everything degrades gracefully: if the LLM isn't configured, is_enabled() is False and the
-    callers simply don't offer the semantic features.
+    database needed. If the collection grows into the tens of thousands, this is the one spot
+    to swap in an approximate-nearest-neighbour index.
+  * If fastembed isn't installed, is_enabled() is False and the callers simply don't offer the
+    semantic features.
 """
 import array
 import hashlib
 import math
+import os
 
-import llm
+import llm  # only for the shared LLMError type (keeps app.py's error handling uniform)
+
+# A compact, good-quality sentence-embedding model (384 dims). Downloaded once (~130MB) and
+# cached; the loaded model stays resident in the server process.
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
+EMBED_DIM = 384
+
+_model = None  # lazily loaded TextEmbedding instance
+
+
+def _get_model():
+    global _model
+    if _model is None:
+        try:
+            from fastembed import TextEmbedding
+        except ImportError as e:
+            raise llm.LLMError("fastembed not installed (%s) — run: pip install fastembed" % e)
+        _model = TextEmbedding(model_name=EMBED_MODEL)
+    return _model
+
+
+def is_enabled():
+    """True when embeddings can be produced (i.e. fastembed is importable)."""
+    try:
+        import fastembed  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def embed_texts(texts):
+    """Embed a list of texts locally, returning a list of float vectors aligned with the input.
+
+    Raises llm.LLMError on failure (so callers can handle it the same way as a remote call).
+    """
+    texts = list(texts)
+    if not texts:
+        return []
+    try:
+        model = _get_model()
+        return [list(map(float, v)) for v in model.embed(texts)]
+    except llm.LLMError:
+        raise
+    except Exception as e:  # fastembed / onnx runtime errors
+        raise llm.LLMError("embedding failed: %s" % e)
 
 
 # ── text → stored vector ────────────────────────────────────────────────────
-def is_enabled():
-    """True when embeddings can be produced (i.e. the LLM/API key is configured)."""
-    return llm.is_enabled()
-
-
 def _text_for(content, anecdote):
     """The text we actually embed for a tip: its content, plus the anecdote if present."""
     parts = [(content or "").strip()]
@@ -70,32 +113,32 @@ def _upsert(conn, tip_id, content, anecdote, vector):
            ON CONFLICT(tip_id) DO UPDATE SET
              model=excluded.model, dim=excluded.dim, content_hash=excluded.content_hash,
              vector=excluded.vector, updated_at=CURRENT_TIMESTAMP""",
-        (tip_id, llm.EMBED_MODEL, len(norm), content_hash(content, anecdote), _pack(norm)),
+        (tip_id, EMBED_MODEL, len(norm), content_hash(content, anecdote), _pack(norm)),
     )
 
 
 # ── populating / keeping fresh ───────────────────────────────────────────────
 def store_one(conn, tip_id, content, anecdote=""):
-    """Embed and store a single tip immediately. Raises llm.LLMError on API failure.
+    """Embed and store a single tip immediately. Raises llm.LLMError on failure.
 
-    The network call happens first, so if it fails nothing is written (and the caller's
-    own transaction is unaffected). Does not commit — the caller owns the transaction.
+    The embedding is computed first, so if it fails nothing is written (and the caller's own
+    transaction is unaffected). Does not commit — the caller owns the transaction.
     """
-    vec = llm.embed_texts([_text_for(content, anecdote)])[0]
+    vec = embed_texts([_text_for(content, anecdote)])[0]
     _upsert(conn, tip_id, content, anecdote, vec)
 
 
 def store_many(conn, rows):
-    """Embed and store a specific list of tips in one batched call. Does not commit.
+    """Embed and store a specific list of tips in one batch. Does not commit.
 
-    `rows` is an iterable of (tip_id, content, anecdote). Used after a batch import so the
-    new tips are embedded together rather than one request each. Raises llm.LLMError on
-    failure (callers that want best-effort behaviour should catch it).
+    `rows` is an iterable of (tip_id, content, anecdote). Used after a batch import so the new
+    tips are embedded together. Raises llm.LLMError on failure (callers wanting best-effort
+    behaviour should catch it).
     """
     rows = list(rows)
     if not rows:
         return 0
-    vectors = llm.embed_texts([_text_for(c, a) for (_id, c, a) in rows])
+    vectors = embed_texts([_text_for(c, a) for (_id, c, a) in rows])
     for (tip_id, content, anecdote), vec in zip(rows, vectors):
         _upsert(conn, tip_id, content, anecdote, vec)
     return len(rows)
@@ -111,13 +154,13 @@ def _stale_tips(conn):
     for t in conn.execute("SELECT id, content, anecdote FROM tips"):
         current = content_hash(t["content"], t["anecdote"])
         existing = have.get(t["id"])
-        if existing is None or existing[0] != current or existing[1] != llm.EMBED_MODEL:
+        if existing is None or existing[0] != current or existing[1] != EMBED_MODEL:
             todo.append((t["id"], t["content"], t["anecdote"] or ""))
     return todo
 
 
 def sync_all(conn):
-    """Embed every tip that needs it (missing/stale), in batches. Commits when done.
+    """Embed every tip that needs it (missing/stale), in one batch. Commits when done.
 
     Returns a summary dict: {"embedded": n, "total": N, "model": ...}. Safe to call
     repeatedly — already-current tips are skipped, so re-running is cheap.
@@ -125,13 +168,12 @@ def sync_all(conn):
     todo = _stale_tips(conn)
     total = conn.execute("SELECT COUNT(*) AS n FROM tips").fetchone()["n"]
     if not todo:
-        return {"embedded": 0, "total": total, "model": llm.EMBED_MODEL}
-    texts = [_text_for(c, a) for (_id, c, a) in todo]
-    vectors = llm.embed_texts(texts)
+        return {"embedded": 0, "total": total, "model": EMBED_MODEL}
+    vectors = embed_texts([_text_for(c, a) for (_id, c, a) in todo])
     for (tip_id, content, anecdote), vec in zip(todo, vectors):
         _upsert(conn, tip_id, content, anecdote, vec)
     conn.commit()
-    return {"embedded": len(todo), "total": total, "model": llm.EMBED_MODEL}
+    return {"embedded": len(todo), "total": total, "model": EMBED_MODEL}
 
 
 def remove(conn, tip_id):
@@ -145,15 +187,15 @@ def status(conn):
     embedded = conn.execute("SELECT COUNT(*) AS n FROM tip_embeddings").fetchone()["n"]
     return {
         "enabled": is_enabled(),
-        "model": llm.EMBED_MODEL,
-        "dim": llm.EMBED_DIM,
+        "model": EMBED_MODEL,
+        "dim": EMBED_DIM,
         "total": total,
         "embedded": embedded,
         "stale": len(_stale_tips(conn)) if is_enabled() else None,
     }
 
 
-# ── similarity queries (no API call beyond embedding the query itself) ───────
+# ── similarity queries (no API call — embeddings are local) ──────────────────
 def _load_vectors(conn, exclude_ids=()):
     """All stored (tip_id, normalised vector) pairs, minus any excluded ids."""
     exclude = set(exclude_ids)
@@ -181,12 +223,12 @@ def search(conn, query, k=10, exclude_ids=()):
     """
     if not (query or "").strip():
         return []
-    query_vec = llm.embed_texts([query])[0]
+    query_vec = embed_texts([query])[0]
     return _rank(query_vec, _load_vectors(conn, exclude_ids), k)
 
 
 def neighbors(conn, tip_id, k=10):
-    """The k tips most similar to a given tip — using its stored vector (no API call)."""
+    """The k tips most similar to a given tip — using its stored vector (no embedding call)."""
     row = conn.execute("SELECT vector FROM tip_embeddings WHERE tip_id = ?", (tip_id,)).fetchone()
     if not row:
         return []

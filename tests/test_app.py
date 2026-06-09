@@ -203,10 +203,10 @@ def test_suggest_tags_503_when_not_configured(client):
 
 def test_suggest_tags_batch_filters_to_allowed(monkeypatch):
     import llm
-    monkeypatch.setattr(llm, "_call_gemini", lambda prompt: [
+    monkeypatch.setattr(llm, "_complete_json", lambda prompt: {"tips": [
         {"primary": "physical", "secondary": ["habit", "notatag", "morning"]},
         {"primary": "notreal", "secondary": ["focus"]},
-    ])
+    ]})
     out = llm.suggest_tags_batch(
         ["Drink water", "Plan your day"],
         primary_tags=["physical", "achievement"],
@@ -245,15 +245,15 @@ def _favorite(client, app_module, token, n, uid):
 
 def test_reflect_on_favorites_parsing(monkeypatch):
     import llm
-    monkeypatch.setattr(llm, "_call_gemini", lambda p: {
-        "themes": [{"title": "Growth", "detail": "you keep learning"}, {"bad": 1}],
-        "resonance": "  You value steady progress.  ",
-        "actions": ["Walk daily", "", None, "Journal"],
+    monkeypatch.setattr(llm, "_complete_json", lambda p, temperature=0.2: {
+        "pattern": "  Most picks are about starting, not finishing.  ",
+        "questions": ["What actually stops you starting?", "", None],
+        "experiments": ["Try a 2-minute start", {"title": "Mornings", "detail": "do it first"}],
     })
-    out = llm.reflect_on_favorites([{"content": "c", "tags": ["t"]}])
-    assert out["resonance"] == "You value steady progress."
-    assert out["themes"] == [{"title": "Growth", "detail": "you keep learning"}]  # malformed item dropped
-    assert out["actions"] == ["Walk daily", "Journal"]                            # blanks dropped
+    out = llm.reflect_on_favorites([{"content": "c", "tags": ["t"]}], library_size=200)
+    assert out["pattern"] == "Most picks are about starting, not finishing."
+    assert out["questions"] == ["What actually stops you starting?"]              # blanks/None dropped
+    assert out["experiments"] == ["Try a 2-minute start", "Mornings — do it first"]  # dict normalised
 
 
 def test_favorites_insights_requires_login(client):
@@ -280,8 +280,8 @@ def test_favorites_insights_needs_three(client, app_module, monkeypatch):
 def test_favorites_insights_success(client, app_module, monkeypatch):
     monkeypatch.setattr(app_module.llm, "is_enabled", lambda: True)
     monkeypatch.setattr(app_module.llm, "reflect_on_favorites",
-                        lambda tips: {"themes": [{"title": "Growth", "detail": "x"}],
-                                      "resonance": "You value growth.", "actions": ["Do one small thing"]})
+                        lambda tips, library_size=None: {"pattern": "You start but rarely finish.",
+                                      "questions": ["Why?"], "experiments": ["Finish one thing"]})
     uid = make_user(app_module)
     token = login_user(client, uid)
     _favorite(client, app_module, token, 3, uid)
@@ -289,4 +289,4 @@ def test_favorites_insights_success(client, app_module, monkeypatch):
     assert r.status_code == 200
     data = r.get_json()
     assert data["count"] == 3
-    assert data["insight"]["resonance"] == "You value growth."
+    assert data["insight"]["pattern"] == "You start but rarely finish."
