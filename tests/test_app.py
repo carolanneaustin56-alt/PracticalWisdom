@@ -290,3 +290,142 @@ def test_favorites_insights_success(client, app_module, monkeypatch):
     data = r.get_json()
     assert data["count"] == 3
     assert data["insight"]["pattern"] == "You start but rarely finish."
+
+
+# ── Full-text search (SQLite FTS5) ──
+def test_fts_migration_applied(app_module):
+    with app_module.get_db() as conn:
+        applied = [r["filename"] for r in conn.execute("SELECT filename FROM schema_migrations")]
+        tbl = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='tips_fts'").fetchone()
+    assert "003_fts.sql" in applied and tbl is not None
+
+
+def test_fts_matches_content_words(client, app_module):
+    add_tip(app_module, "Drink water in the morning", ["physical"])
+    add_tip(app_module, "Save money every week", ["financial"])
+    contents = [t["content"] for t in client.get("/api/tips/fts?q=water").get_json()["results"]]
+    assert "Drink water in the morning" in contents
+    assert "Save money every week" not in contents
+
+
+def test_fts_prefix_and_stemming(client, app_module):
+    add_tip(app_module, "Protect your mornings", ["physical"])
+    # prefix: "morn" -> "mornings"
+    assert any("mornings" in t["content"] for t in client.get("/api/tips/fts?q=morn").get_json()["results"])
+
+
+def test_fts_indexes_new_tip_via_api(client):
+    token = login_admin(client)
+    client.post("/api/tips", json={"content": "Stretch every hour", "tags": ["physical"]},
+                headers={"X-CSRF-Token": token})
+    assert any(t["content"] == "Stretch every hour"
+               for t in client.get("/api/tips/fts?q=stretch").get_json()["results"])
+
+
+def test_fts_reflects_edit_and_delete(client, app_module):
+    tid = add_tip(app_module, "alpha unique zebra", ["moral"])
+    token = login_admin(client)
+    assert client.get("/api/tips/fts?q=zebra").get_json()["results"]
+    client.put(f"/api/tips/{tid}", json={"content": "beta unique giraffe"},
+               headers={"X-CSRF-Token": token})
+    assert client.get("/api/tips/fts?q=giraffe").get_json()["results"]    # new word indexed
+    assert client.get("/api/tips/fts?q=zebra").get_json()["results"] == []  # old word gone
+    client.delete(f"/api/tips/{tid}", headers={"X-CSRF-Token": token})
+    assert client.get("/api/tips/fts?q=giraffe").get_json()["results"] == []
+
+
+def test_fts_empty_query(client):
+    assert client.get("/api/tips/fts?q=").get_json() == {"results": []}
+
+
+def test_fts_handles_punctuation_safely(client, app_module):
+    add_tip(app_module, "Don't overthink it", ["moral"])
+    r = client.get("/api/tips/fts", query_string={"q": "don't!! @#$%"})
+    assert r.status_code == 200
+    assert any("overthink" in t["content"] for t in r.get_json()["results"])
+
+
+# ── Community submissions + moderation queue ──
+def test_submission_requires_login(client):
+    r = client.post("/api/submissions", json={"content": "x"}, headers={"X-CSRF-Token": get_csrf(client)})
+    assert r.status_code == 401
+
+
+def test_submit_creates_pending_and_lists_for_admin(client, app_module):
+    uid = make_user(app_module)
+    token = login_user(client, uid)
+    r = client.post("/api/submissions", json={"content": "Walk after meals", "tags": ["physical"]},
+                    headers={"X-CSRF-Token": token})
+    assert r.status_code == 201 and r.get_json()["status"] == "pending"
+    login_admin(client)
+    subs = client.get("/api/submissions").get_json()["submissions"]
+    assert any(s["content"] == "Walk after meals" for s in subs)
+
+
+def test_list_submissions_requires_admin(client, app_module):
+    uid = make_user(app_module)
+    login_user(client, uid)
+    assert client.get("/api/submissions").status_code == 403
+
+
+def test_pending_submission_not_in_corpus(client, app_module):
+    uid = make_user(app_module)
+    token = login_user(client, uid)
+    client.post("/api/submissions", json={"content": "Zorptastic unique phrase", "tags": ["moral"]},
+                headers={"X-CSRF-Token": token})
+    # pending content must NOT leak into the live corpus or full-text search
+    assert client.get("/api/tips/fts?q=zorptastic").get_json()["results"] == []
+    assert not any(t["content"] == "Zorptastic unique phrase" for t in client.get("/api/tips").get_json())
+
+
+def test_approve_creates_indexed_tip(client, app_module):
+    uid = make_user(app_module)
+    token = login_user(client, uid)
+    sub = client.post("/api/submissions", json={"content": "Zorptastic unique phrase", "tags": ["moral"]},
+                      headers={"X-CSRF-Token": token}).get_json()
+    admin_token = login_admin(client)
+    r = client.post(f"/api/submissions/{sub['id']}/approve", json={}, headers={"X-CSRF-Token": admin_token})
+    assert r.status_code == 201
+    tip = r.get_json()["tip"]
+    assert tip["content"] == "Zorptastic unique phrase" and "moral" in tip["tags"]
+    # now it's a real tip: in the corpus and full-text searchable
+    assert any(t["id"] == tip["id"] for t in client.get("/api/tips").get_json())
+    assert any(t["id"] == tip["id"] for t in client.get("/api/tips/fts?q=zorptastic").get_json()["results"])
+    # submission marked approved
+    approved = client.get("/api/submissions?status=approved").get_json()["submissions"]
+    assert any(s["id"] == sub["id"] for s in approved)
+
+
+def test_approve_requires_a_tag(client, app_module):
+    uid = make_user(app_module)
+    token = login_user(client, uid)
+    sub = client.post("/api/submissions", json={"content": "No tags here"},
+                      headers={"X-CSRF-Token": token}).get_json()
+    admin_token = login_admin(client)
+    r = client.post(f"/api/submissions/{sub['id']}/approve", json={}, headers={"X-CSRF-Token": admin_token})
+    assert r.status_code == 400
+
+
+def test_reject_does_not_create_tip(client, app_module):
+    uid = make_user(app_module)
+    token = login_user(client, uid)
+    sub = client.post("/api/submissions", json={"content": "Reject me please", "tags": ["moral"]},
+                      headers={"X-CSRF-Token": token}).get_json()
+    admin_token = login_admin(client)
+    assert client.post(f"/api/submissions/{sub['id']}/reject", json={},
+                       headers={"X-CSRF-Token": admin_token}).status_code == 200
+    assert not any(t["content"] == "Reject me please" for t in client.get("/api/tips").get_json())
+    # re-approving a non-pending submission is rejected
+    assert client.post(f"/api/submissions/{sub['id']}/approve", json={},
+                       headers={"X-CSRF-Token": admin_token}).status_code == 409
+
+
+def test_me_reports_pending_count_for_admin(client, app_module):
+    uid = make_user(app_module)
+    token = login_user(client, uid)
+    client.post("/api/submissions", json={"content": "Count me", "tags": ["moral"]},
+                headers={"X-CSRF-Token": token})
+    assert client.get("/api/me").get_json()["pending_submissions"] == 0   # not admin yet
+    login_admin(client)
+    assert client.get("/api/me").get_json()["pending_submissions"] == 1

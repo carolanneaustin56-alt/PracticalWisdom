@@ -6,6 +6,7 @@ import sqlite3
 import secrets
 import time
 import os
+import re
 
 import llm  # optional Gemini helpers (reads its key lazily, so import order is fine)
 import embeddings  # semantic-similarity foundation (also degrades to no-op without a key)
@@ -301,6 +302,45 @@ def semantic_search():
                 tip["similarity"] = h["score"]
                 results.append(tip)
     return jsonify({"enabled": True, "results": results})
+
+
+def _fts_match(q):
+    """Turn free user text into a safe FTS5 MATCH expression.
+
+    We only keep word characters (dropping FTS operators/punctuation that could be a syntax
+    error), quote each token, and add a prefix `*` so partial words match. Space-separated
+    tokens are AND-ed by FTS5, so all words must appear. Returns None for an empty query.
+    """
+    tokens = re.findall(r"\w+", q.lower())
+    if not tokens:
+        return None
+    return " ".join('"%s"*' % t for t in tokens)
+
+
+@app.get("/api/tips/fts")
+def fulltext_search():
+    """Search the actual words of tips (content + anecdote) via SQLite FTS5, ranked by relevance.
+
+    Open to everyone, needs no API key. Returns {"results": [...full tips...]} best-match first.
+    """
+    q = (request.args.get("q") or "").strip()
+    try:
+        k = max(1, min(int(request.args.get("k", 50)), 100))
+    except ValueError:
+        k = 50
+    match = _fts_match(q)
+    if not match:
+        return jsonify({"results": []})
+    with get_db() as conn:
+        try:
+            rows = conn.execute(
+                "SELECT rowid FROM tips_fts WHERE tips_fts MATCH ? ORDER BY rank LIMIT ?",
+                (match, k),
+            ).fetchall()
+        except sqlite3.OperationalError as e:
+            return jsonify({"error": "Search failed: %s" % e}), 500
+        results = [t for t in (tip_with_tags(conn, r["rowid"]) for r in rows) if t]
+    return jsonify({"results": results})
 
 
 @app.post("/api/advise")
@@ -664,9 +704,14 @@ def api_me():
             user = {"id": u["id"], "email": u["email"], "name": u["name"], "picture": u["picture"]}
         else:
             session.pop("uid", None)  # stale session (user row gone)
+    pending_submissions = 0
+    if is_admin():
+        with get_db() as conn:
+            pending_submissions = conn.execute(
+                "SELECT COUNT(*) AS n FROM tip_submissions WHERE status = 'pending'").fetchone()["n"]
     return jsonify({"user": user, "auth_enabled": AUTH_ENABLED, "is_admin": is_admin(),
                     "llm_enabled": llm.is_enabled(), "embeddings_enabled": embeddings.is_enabled(),
-                    "csrf_token": csrf_token()})
+                    "pending_submissions": pending_submissions, "csrf_token": csrf_token()})
 
 
 @app.post("/api/admin/login")
@@ -783,6 +828,116 @@ def favorites_insights():
     except llm.LLMError as e:
         return jsonify({"error": "Reflection failed: %s" % e}), 502
     return jsonify({"count": len(tips), "insight": insight})
+
+
+# ──────────────────────── Community tip submissions ────────────────────────
+
+def _submission_json(conn, row):
+    submitter = None
+    if row["user_id"]:
+        u = conn.execute("SELECT name, email FROM users WHERE id = ?", (row["user_id"],)).fetchone()
+        if u:
+            submitter = u["name"] or u["email"]
+    return {
+        "id": row["id"], "content": row["content"], "anecdote": row["anecdote"] or "",
+        "tags": [t for t in (row["tags"] or "").split(",") if t],
+        "status": row["status"], "created_at": row["created_at"], "submitter": submitter,
+    }
+
+
+@app.post("/api/submissions")
+def create_submission():
+    """A signed-in user suggests a tip. It enters the moderation queue (status=pending)."""
+    uid = current_user_id()
+    if not uid:
+        return jsonify({"error": "Sign in to suggest a tip."}), 401
+    data = request.get_json(force=True) or {}
+    content = (data.get("content") or "").strip()
+    if not content:
+        return jsonify({"error": "Write the tip first."}), 400
+    if len(content) > 600:
+        return jsonify({"error": "Keep tips under 600 characters."}), 400
+    anecdote = (data.get("anecdote") or "").strip()[:1000]
+    tags = ",".join(t.strip().lower() for t in (data.get("tags") or []) if t and t.strip())
+    with get_db() as conn:
+        pending = conn.execute(
+            "SELECT COUNT(*) AS n FROM tip_submissions WHERE user_id = ? AND status = 'pending'",
+            (uid,)).fetchone()["n"]
+        if pending >= 25:
+            return jsonify({"error": "You have several tips awaiting review — give those a chance first."}), 429
+        cur = conn.execute(
+            "INSERT INTO tip_submissions (content, anecdote, tags, user_id) VALUES (?, ?, ?, ?)",
+            (content, anecdote, tags, uid))
+        conn.commit()
+        row = conn.execute("SELECT * FROM tip_submissions WHERE id = ?", (cur.lastrowid,)).fetchone()
+        return jsonify(_submission_json(conn, row)), 201
+
+
+@app.get("/api/submissions")
+@admin_required
+def list_submissions():
+    """Admin: list submissions (default the pending queue)."""
+    status = request.args.get("status", "pending")
+    with get_db() as conn:
+        if status == "all":
+            rows = conn.execute("SELECT * FROM tip_submissions ORDER BY created_at DESC").fetchall()
+        else:
+            if status not in ("pending", "approved", "rejected"):
+                status = "pending"
+            rows = conn.execute(
+                "SELECT * FROM tip_submissions WHERE status = ? ORDER BY created_at DESC", (status,)).fetchall()
+        return jsonify({"submissions": [_submission_json(conn, r) for r in rows]})
+
+
+@app.post("/api/submissions/<int:sub_id>/approve")
+@admin_required
+def approve_submission(sub_id):
+    """Approve a submission: create a real tip (with tags + embedding) and mark it approved.
+
+    The admin may pass edited content/anecdote/tags; otherwise the submitted values are used.
+    First tag becomes primary, the rest secondary (same as a batch import).
+    """
+    data = request.get_json(force=True) or {}
+    with get_db() as conn:
+        sub = conn.execute("SELECT * FROM tip_submissions WHERE id = ?", (sub_id,)).fetchone()
+        if not sub:
+            return jsonify({"error": "submission not found"}), 404
+        if sub["status"] != "pending":
+            return jsonify({"error": "Already %s." % sub["status"]}), 409
+        content = (data.get("content") or sub["content"] or "").strip()
+        anecdote = (data.get("anecdote") if data.get("anecdote") is not None else (sub["anecdote"] or "")).strip()
+        if "tags" in data:
+            tags = [t.strip().lower() for t in data.get("tags") if t and t.strip()]
+        else:
+            tags = [t for t in (sub["tags"] or "").split(",") if t]
+        if not content:
+            return jsonify({"error": "content is required"}), 400
+        if not tags:
+            return jsonify({"error": "Add at least one tag (the first becomes the primary)."}), 400
+        cur = conn.execute("INSERT INTO tips (content, anecdote) VALUES (?, ?)", (content, anecdote))
+        tip_id = cur.lastrowid
+        for i, name in enumerate(tags):
+            tag_id = get_or_create_tag(conn, name, tier="primary" if i == 0 else "secondary")
+            conn.execute("INSERT OR IGNORE INTO tip_tags (tip_id, tag_id) VALUES (?, ?)", (tip_id, tag_id))
+        embed_quietly(conn, tip_id, content, anecdote)   # index it for semantic search
+        conn.execute(
+            "UPDATE tip_submissions SET status='approved', reviewed_at=CURRENT_TIMESTAMP, tip_id=? WHERE id=?",
+            (tip_id, sub_id))
+        conn.commit()
+        return jsonify({"approved": sub_id, "tip": tip_with_tags(conn, tip_id)}), 201
+
+
+@app.post("/api/submissions/<int:sub_id>/reject")
+@admin_required
+def reject_submission(sub_id):
+    """Admin: reject a submission (kept in the table as a record, not turned into a tip)."""
+    with get_db() as conn:
+        if not conn.execute("SELECT 1 FROM tip_submissions WHERE id = ?", (sub_id,)).fetchone():
+            return jsonify({"error": "submission not found"}), 404
+        conn.execute(
+            "UPDATE tip_submissions SET status='rejected', reviewed_at=CURRENT_TIMESTAMP WHERE id = ?", (sub_id,))
+        conn.commit()
+    return jsonify({"rejected": sub_id})
 
 
 @app.get("/api/seen")

@@ -11,6 +11,8 @@
   let favoritesOnly = false; // show only the signed-in user's favorites
   let isAdmin = false;       // administrator session (unlocks List view + management)
   let embeddingsEnabled = false; // whether semantic features (search/recommender) are available
+  let llmEnabled = false;    // whether text-generation features (tags/advice) are available
+  let pendingCount = 0;      // submissions awaiting review (admins only)
   let searchActive = false;  // showing semantic-search results instead of the current view
   let lastSearch = { q: "", results: [] };
   // How the "next suggested tip" is chosen: "tags" (shared secondary tags) or "meaning"
@@ -53,12 +55,20 @@
     authEnabled = data.auth_enabled;
     isAdmin = data.is_admin;
     embeddingsEnabled = !!data.embeddings_enabled;
+    llmEnabled = !!data.llm_enabled;
+    pendingCount = data.pending_submissions || 0;
     const sb = $("smart-search-btn");
     if (sb) sb.style.display = embeddingsEnabled ? "" : "none";
     const ab = $("view-advise");
     if (ab) ab.style.display = embeddingsEnabled ? "" : "none";
     updateSuggestModeButtons();
+    updateReviewBtn();
     renderAuth();
+  }
+
+  function updateReviewBtn() {
+    const b = $("review-subs-btn");
+    if (b) b.textContent = "Review submissions" + (pendingCount ? ` (${pendingCount})` : "");
   }
 
   // ── Suggestion engine: tag-overlap vs semantic "meaning" (shared by Cards + Network) ──
@@ -107,6 +117,8 @@
     else $("admin-open-btn").onclick = openAdminModal;
     const favBtn = $("favorites-btn");
     if (favBtn) favBtn.style.display = currentUser ? "" : "none";
+    const sugBtn = $("suggest-tip-btn");
+    if (sugBtn) sugBtn.style.display = currentUser ? "" : "none";
   }
 
   // Show/hide List view + management based on role, then render the right view.
@@ -299,14 +311,12 @@
     } else {
       activeTags.push(name);
     }
-    $("search-input").value = activeTags.join(", ");
     loadSidebar();
     renderCurrentView();
   }
 
   $("clear-tags-btn").onclick = () => {
     activeTags = [];
-    $("search-input").value = "";
     loadSidebar();
     renderCurrentView();
   };
@@ -431,30 +441,39 @@
     $("save-status").style.color = "#5a8a2a";
     $("save-status").textContent = "Saved!";
     setTimeout(() => { $("save-status").textContent = ""; }, 2000);
-    loadTips($("search-input").value);
+    loadTips(activeTags.join(","));
     loadSidebar();
   };
 
   // ── Search ────────────────────────────────────────────────────
-  // Two modes share one input: "Search" filters by exact tags (sidebar-driven), while
-  // "✨ Meaning" ranks tips by semantic similarity to the typed phrase (embeddings).
-  $("search-btn").onclick = () => {
-    const val = $("search-input").value.trim();
-    activeTags = val ? val.split(",").map(t => t.trim().toLowerCase()).filter(Boolean) : [];
-    loadSidebar();
-    renderCurrentView();
-  };
+  // The text box searches the actual words of tips ("Search" → full-text via FTS5); "✨ Meaning"
+  // ranks by semantic similarity. Filtering by tag is done from the sidebar, independent of this.
+  $("search-btn").onclick = runTextSearch;
+  $("search-input").onkeydown = e => { if (e.key === "Enter") runTextSearch(); };
 
-  $("search-input").onkeydown = e => { if (e.key === "Enter") $("search-btn").click(); };
-
-  // ── Semantic ("meaning") search ──
   function showOnlySearchPanel() {
-    ["tip-list", "network-view", "card-view", "fav-list"].forEach(id => { $(id).style.display = "none"; });
+    ["tip-list", "network-view", "card-view", "fav-list", "advise-view"].forEach(id => { $(id).style.display = "none"; });
     stopSim();
     $("net-tooltip").style.display = "none";
     $("search-results").style.display = "flex";
   }
 
+  // Full-text search over the words of each tip.
+  async function runTextSearch() {
+    const q = $("search-input").value.trim();
+    if (!q) { $("search-input").focus(); return; }
+    searchActive = true;
+    showOnlySearchPanel();
+    const panel = $("search-results");
+    panel.innerHTML = `<div class="fav-list-head">Searching for “${escHtml(q)}”…</div>${SPINNER}`;
+    const res = await api("GET", "/api/tips/fts?q=" + encodeURIComponent(q));
+    if (!searchActive) return;                       // user navigated away while it loaded
+    if (res.error) { panel.innerHTML = ERR(res.error); return; }
+    lastSearch = { q, results: res.results || [], mode: "text" };
+    renderSearchResults();
+  }
+
+  // Semantic ("meaning") search via embeddings.
   async function runSemanticSearch() {
     const q = $("search-input").value.trim();
     if (!q) { $("search-input").focus(); return; }
@@ -464,18 +483,20 @@
     const panel = $("search-results");
     panel.innerHTML = `<div class="fav-list-head">✨ Searching for “${escHtml(q)}”…</div>${SPINNER}`;
     const res = await api("GET", "/api/tips/search?q=" + encodeURIComponent(q));
-    if (!searchActive) return;                       // user navigated away while it loaded
+    if (!searchActive) return;
     if (res.error) { panel.innerHTML = ERR(res.error); return; }
-    lastSearch = { q, results: res.results || [] };
+    lastSearch = { q, results: res.results || [], mode: "meaning" };
     renderSearchResults();
   }
 
   function renderSearchResults() {
     const panel = $("search-results");
-    const { q, results } = lastSearch;
+    const { q, results, mode } = lastSearch;
+    const head = mode === "meaning"
+      ? `✨ Closest in meaning to “${escHtml(q)}”`
+      : `Tips matching “${escHtml(q)}”`;
     panel.innerHTML =
-      `<div class="fav-list-head">✨ Closest in meaning to “${escHtml(q)}”` +
-      `<button class="btn secondary" id="search-clear">✕ Clear</button></div>`;
+      `<div class="fav-list-head">${head}<button class="btn secondary" id="search-clear">✕ Clear</button></div>`;
     $("search-clear").onclick = clearSearch;
     if (!results.length) {
       panel.insertAdjacentHTML("beforeend",
@@ -485,7 +506,9 @@
     results.forEach(tip => {
       const card = document.createElement("div");
       card.className = "tip-card";
-      const pct = Math.round((tip.similarity || 0) * 100);
+      const badge = (mode === "meaning" && tip.similarity != null)
+        ? `<span class="sim-badge" title="How close this tip is in meaning">${Math.round(tip.similarity * 100)}%</span>`
+        : "";
       card.innerHTML = `
         <div class="vote-col">
           <button class="vote-btn up${tip.my_vote === 1 ? " on" : ""}" title="Upvote (saves to favorites)" aria-label="Upvote">▲</button>
@@ -495,8 +518,7 @@
         <div class="tip-main">
           <div class="tip-content">${escHtml(tip.content)}</div>
           ${tip.tags.length ? `<div class="tip-tags">${tip.tags.map(t => `<span class="chip">${escHtml(t)}</span>`).join("")}</div>` : ""}
-        </div>
-        <span class="sim-badge" title="How close this tip is in meaning">${pct}%</span>`;
+        </div>${badge}`;
       bindTipControls(card, tip);
       panel.appendChild(card);
     });
@@ -543,7 +565,7 @@
     await api("DELETE", `/api/tips/${selectedTip.id}`);
     selectedTip = null;
     $("detail-pane").classList.add("hidden");
-    loadTips($("search-input").value);
+    loadTips(activeTags.join(","));
     loadSidebar();
   };
 
@@ -569,7 +591,7 @@
         if (created.error) { $("modal-status").textContent = created.error; return; }
       }
       $("modal-overlay").classList.add("hidden");
-      loadTips($("search-input").value);
+      loadTips(activeTags.join(","));
       loadSidebar();
     } catch (err) {
       console.error("Save failed:", err);
@@ -897,7 +919,6 @@
     // If the deleted tag was in the active filter, drop it.
     if (activeTags.includes(name)) {
       activeTags = activeTags.filter(t => t !== name);
-      $("search-input").value = activeTags.join(", ");
     }
     await renderManageTagsList();
     loadSidebar();
@@ -1531,7 +1552,6 @@
     if (activeTags.length) {
       // A tag filter is active → clear it and reload the full network.
       activeTags = [];
-      $("search-input").value = "";
       loadTips("");
       loadSidebar();
       buildNetwork();
@@ -1725,6 +1745,94 @@
     enterCardView();
   }
 
+  // ── Card-view swipe gestures (Tinder-style: drag right = save, left = skip) ──
+  // Pointer events cover both touch and mouse. Right past the threshold saves the tip (an
+  // upvote/favourite) then advances; left just advances. Buttons inside the card still work.
+  async function saveTipForSwipe(tip) {
+    if (!requireLogin()) return false;          // not signed in → prompt, don't save
+    if (tip.my_vote === 1) return true;          // already saved
+    const u = await api("POST", `/api/tips/${tip.id}/vote`, { value: 1 });
+    if (!u || u.error) { toast((u && u.error) || "Couldn't save."); return false; }
+    Object.assign(tip, u);
+    return true;
+  }
+
+  function resetSwipeBadges() {
+    $("cv-card").querySelectorAll(".cv-swipe-badge").forEach(b => { b.style.opacity = 0; });
+  }
+
+  let cvAnimating = false;
+  function commitSwipe(dir) {
+    const card = $("cv-card");
+    const off = dir === "save" ? 1 : -1;
+    cvAnimating = true;
+    card.classList.remove("swiping");
+    card.style.transition = "transform var(--motion) var(--ease), opacity var(--motion) var(--ease)";
+    card.style.transform = `translateX(${off * 130}%) rotate(${off * 14}deg)`;
+    card.style.opacity = "0";
+    const cur = cardCurrent;
+    setTimeout(async () => {
+      if (dir === "save" && cur != null && NET.byId[cur]) await saveTipForSwipe(NET.byId[cur].tip);
+      const advanced = cardNextId != null;
+      if (advanced) cardNext();                  // re-renders the card with the next tip
+      // snap the (possibly new) card straight back to centre — no rAF, so it can't get
+      // stuck off-screen if the tab is backgrounded; the outgoing fling is the feedback
+      card.style.transition = "none";
+      card.style.transform = "";
+      card.style.opacity = "";
+      resetSwipeBadges();
+      cvAnimating = false;
+      if (!advanced) toast(dir === "save" ? "Saved — that's the last suggested tip." : "That's the last suggested tip.");
+    }, 190);
+  }
+
+  function initCardSwipe() {
+    const card = $("cv-card");
+    const saveBadge = card.querySelector(".cv-swipe-badge.save");
+    const skipBadge = card.querySelector(".cv-swipe-badge.skip");
+    const THRESH = 95;
+    let dragging = false, decided = false, horizontal = false, startX = 0, startY = 0, dx = 0;
+
+    card.addEventListener("pointerdown", e => {
+      if (cvAnimating || cardCurrent == null) return;
+      if (e.target.closest("button, a, input, textarea, select")) return;  // keep controls clickable
+      dragging = true; decided = false; horizontal = false;
+      startX = e.clientX; startY = e.clientY; dx = 0;
+      card.style.transition = "none";
+      try { card.setPointerCapture(e.pointerId); } catch (_) {}
+    });
+    card.addEventListener("pointermove", e => {
+      if (!dragging) return;
+      dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      if (!decided) {
+        if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+        horizontal = Math.abs(dx) > Math.abs(dy);
+        decided = true;
+        if (!horizontal) { dragging = false; return; }   // vertical intent → let the page scroll
+        card.classList.add("swiping");
+      }
+      card.style.transform = `translateX(${dx}px) rotate(${dx / 22}deg)`;
+      const t = Math.min(Math.abs(dx) / THRESH, 1);
+      if (saveBadge) saveBadge.style.opacity = dx > 0 ? t : 0;
+      if (skipBadge) skipBadge.style.opacity = dx < 0 ? t : 0;
+    });
+    const finish = () => {
+      if (!dragging) return;
+      dragging = false;
+      card.classList.remove("swiping");
+      if (horizontal && Math.abs(dx) > THRESH) {
+        commitSwipe(dx > 0 ? "save" : "skip");
+      } else {                                    // snap back
+        card.style.transition = "transform var(--motion) var(--ease)";
+        card.style.transform = "";
+        resetSwipeBadges();
+      }
+    };
+    card.addEventListener("pointerup", finish);
+    card.addEventListener("pointercancel", finish);
+  }
+
   function setView(v) {
     currentView = v;
     $("view-list").classList.toggle("active", v === "list");
@@ -1875,6 +1983,143 @@
   $("insights-regen").onclick = runFavInsights;
   dismissOnBackdrop("insights-overlay");
 
+  // ════════════════ Community submissions ═══════════════════════
+  // Any signed-in user can suggest a tip; it enters a moderation queue admins review.
+  function openSuggest() {
+    $("suggest-content").value = ""; $("suggest-anecdote").value = ""; $("suggest-tags").value = "";
+    $("suggest-status").textContent = "";
+    $("suggest-overlay").classList.remove("hidden");
+    $("suggest-content").focus();
+  }
+  $("suggest-tip-btn").onclick = openSuggest;
+  $("suggest-cancel").onclick = () => $("suggest-overlay").classList.add("hidden");
+  dismissOnBackdrop("suggest-overlay");
+
+  $("suggest-submit").onclick = async () => {
+    const content = $("suggest-content").value.trim();
+    if (!content) { $("suggest-content").focus(); return; }
+    const anecdote = $("suggest-anecdote").value.trim();
+    const tags = $("suggest-tags").value.split(",").map(t => t.replace(/^#/, "").trim().toLowerCase()).filter(Boolean);
+    $("suggest-submit").disabled = true;
+    const res = await api("POST", "/api/submissions", { content, anecdote, tags });
+    $("suggest-submit").disabled = false;
+    if (res.error) { $("suggest-status").style.color = "var(--danger)"; $("suggest-status").textContent = res.error; return; }
+    $("suggest-overlay").classList.add("hidden");
+    toast("Thanks! Your tip is in the review queue.");
+  };
+
+  // ── Admin: moderation queue ──
+  let reviewItems = [];
+  async function openReview() {
+    $("review-overlay").classList.remove("hidden");
+    $("review-status").textContent = "";
+    $("review-suggest-btn").style.display = llmEnabled ? "" : "none";
+    $("review-list").innerHTML = SPINNER;
+    const res = await api("GET", "/api/submissions?status=pending");
+    if (!res || !res.submissions) { $("review-list").innerHTML = ERR("Couldn't load submissions."); return; }
+    reviewItems = res.submissions.map(s => ({ id: s.id, content: s.content, anecdote: s.anecdote, tags: s.tags.slice(), submitter: s.submitter }));
+    renderReviewList();
+  }
+
+  function renderReviewList() {
+    const list = $("review-list");
+    list.innerHTML = "";
+    if (!reviewItems.length) {
+      list.innerHTML = `<div id="empty-state">No tips awaiting review. 🎉</div>`;
+      updateReviewSummary();
+      return;
+    }
+    reviewItems.forEach(item => list.appendChild(renderReviewRow(item)));
+    updateReviewSummary();
+  }
+
+  function renderReviewRow(item) {
+    const row = document.createElement("div");
+    row.className = "review-row";
+    const meta = document.createElement("div");
+    meta.className = "review-meta";
+    meta.textContent = item.submitter ? `Suggested by ${item.submitter}` : "Suggested anonymously";
+    const content = document.createElement("input");
+    content.className = "review-content"; content.type = "text"; content.value = item.content;
+    content.oninput = () => { item.content = content.value; };
+    const tags = document.createElement("input");
+    tags.className = "review-tags"; tags.type = "text"; tags.value = item.tags.join(", ");
+    tags.placeholder = "tags, comma-separated — first is primary";
+    tags.oninput = () => { item.tags = tags.value.split(",").map(s => s.replace(/^#/, "").trim().toLowerCase()).filter(Boolean); };
+    const actions = document.createElement("div");
+    actions.className = "review-actions";
+    const reject = document.createElement("button");
+    reject.className = "btn secondary"; reject.textContent = "Reject";
+    const approve = document.createElement("button");
+    approve.className = "btn"; approve.textContent = "Approve";
+    reject.onclick = () => decideReview(item, "reject", row);
+    approve.onclick = () => decideReview(item, "approve", row);
+    actions.append(reject, approve);
+    row.append(meta, content, tags);
+    if (item.anecdote) {
+      const anec = document.createElement("div");
+      anec.className = "review-anec"; anec.textContent = item.anecdote;
+      row.append(anec);
+    }
+    row.append(actions);
+    return row;
+  }
+
+  async function decideReview(item, action, row) {
+    let res;
+    if (action === "approve") {
+      if (!item.tags.length) { toast("Add at least one tag (the first becomes the primary)."); return; }
+      res = await api("POST", `/api/submissions/${item.id}/approve`,
+                      { content: item.content.trim(), anecdote: item.anecdote, tags: item.tags });
+    } else {
+      res = await api("POST", `/api/submissions/${item.id}/reject`, {});
+    }
+    if (res.error) { toast(res.error); return; }
+    reviewItems = reviewItems.filter(x => x.id !== item.id);
+    row.remove();
+    if (!reviewItems.length) renderReviewList();   // show the "all clear" empty state
+    updateReviewSummary();
+    pendingCount = Math.max(0, pendingCount - 1);
+    updateReviewBtn();
+    if (action === "approve") {
+      $("review-status").style.color = "var(--accent)";
+      $("review-status").textContent = "Approved — added to the collection.";
+      loadSidebar();              // tag counts changed
+    } else {
+      $("review-status").style.color = "var(--text-secondary)";
+      $("review-status").textContent = "Rejected.";
+    }
+  }
+
+  function updateReviewSummary() {
+    const n = reviewItems.length;
+    $("review-summary").textContent = n ? `${n} tip${n !== 1 ? "s" : ""} awaiting review` : "";
+  }
+
+  // ✨ Suggest tags for submissions that don't have any (reuses the Gemini/Groq tagging endpoint).
+  async function reviewSuggestTags() {
+    const empties = reviewItems.filter(i => i.content.trim() && !i.tags.length);
+    if (!empties.length) { toast("Every submission already has tags."); return; }
+    const btn = $("review-suggest-btn"); const label = btn.textContent;
+    btn.disabled = true; btn.textContent = "Suggesting…";
+    const res = await api("POST", "/api/llm/suggest-tags", { contents: empties.map(i => i.content.trim()) });
+    btn.disabled = false; btn.textContent = label;
+    if (res.error) { toast(res.error); return; }
+    (res.suggestions || []).forEach((sug, idx) => {
+      const item = empties[idx]; if (!item) return;
+      const tags = [];
+      if (sug.primary) tags.push(sug.primary);
+      (sug.secondary || []).forEach(t => { if (!tags.includes(t)) tags.push(t); });
+      if (tags.length) item.tags = tags;
+    });
+    renderReviewList();
+  }
+
+  $("review-subs-btn").onclick = openReview;
+  $("review-close").onclick = () => $("review-overlay").classList.add("hidden");
+  $("review-suggest-btn").onclick = reviewSuggestTags;
+  dismissOnBackdrop("review-overlay");
+
   // ── Init ──────────────────────────────────────────────────────
   $("view-list").onclick = () => setView("list");
   $("view-network").onclick = () => setView("network");
@@ -1883,6 +2128,7 @@
   $("cv-next").onclick = cardNext;
   $("cv-prev").onclick = cardPrev;
   $("cv-restart").onclick = cardRestart;
+  initCardSwipe();
   $("net-suggest-mode").onclick = flipSuggestMode;
   $("cv-suggest-mode").onclick = flipSuggestMode;
   $("linkmode-tags").onclick = () => setLinkMode("tags");

@@ -44,10 +44,14 @@
         <button class="view-btn" id="view-cards">Cards</button>
         <button class="view-btn" id="view-advise" style="display:none">Ask</button>
       </div>
-      <input id="search-input" type="text" placeholder="Tags (comma-separated), or a phrase for ✨ Meaning…" />
-      <button class="btn secondary" id="search-btn">Search</button>
-      <button class="btn secondary" id="smart-search-btn" style="display:none" title="Find tips by meaning, not just matching tags">✨ Meaning</button>
+      <div class="tb-group" id="tb-search">
+        <input id="search-input" type="text" placeholder="Search tips by word… (or ✨ Meaning)" />
+        <button class="btn secondary" id="search-btn">Search</button>
+        <button class="btn secondary" id="smart-search-btn" style="display:none" title="Find tips by meaning, not just matching tags">✨ Meaning</button>
+      </div>
+      <div class="tb-group" id="tb-user">
       <button class="btn secondary" id="favorites-btn" style="display:none">★ Favorites</button>
+      <button class="btn secondary" id="suggest-tip-btn" style="display:none" title="Suggest a tip for review">✍ Suggest a tip</button>
       <div id="mgmt-wrap" style="display:none">
         <button class="btn" id="mgmt-toggle">Tips &amp; Tags Management ▾</button>
         <div id="mgmt-menu" class="hidden">
@@ -56,7 +60,9 @@
           <button class="btn secondary" id="import-tags-btn">Import tags</button>
           <button class="btn secondary" id="apply-tag-btn">Apply a tag to tips</button>
           <button class="btn secondary" id="manage-tags-btn">Delete tags</button>
+          <button class="btn secondary" id="review-subs-btn">Review submissions</button>
         </div>
+      </div>
       </div>
     </div>
     <div id="tip-list">
@@ -94,6 +100,8 @@
     <div id="card-view">
       <div id="card-stage">
         <div id="cv-card">
+          <div class="cv-swipe-badge save" aria-hidden="true">Save</div>
+          <div class="cv-swipe-badge skip" aria-hidden="true">Skip</div>
           <div id="cv-content"></div>
           <div id="cv-anecdote"></div>
           <div id="cv-tags"></div>
@@ -103,6 +111,7 @@
           <button class="btn secondary" id="cv-prev">‹ Back</button>
           <button class="btn" id="cv-next">Next tip ›</button>
         </div>
+        <div id="cv-swipe-hint">← swipe to skip · swipe to save →</div>
         <div id="cv-foot">
           <button class="btn secondary" id="cv-restart">↻ Start over</button>
           <button class="btn secondary" id="cv-suggest-mode" style="display:none" title="How the next tip is chosen: by shared tags, or by meaning"></button>
@@ -279,6 +288,46 @@
     <div id="manage-tags-status" style="font-size:0.8rem;color:#5a8a2a;min-height:1em"></div>
     <div class="modal-actions">
       <button class="btn secondary" id="manage-tags-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Suggest a Tip Modal (any signed-in user) -->
+<div class="overlay hidden" id="suggest-overlay">
+  <div class="modal" style="width:520px">
+    <h2>Suggest a tip</h2>
+    <p class="insights-sub">Share a piece of practical wisdom. An admin reviews suggestions before they join the collection.</p>
+    <div>
+      <label>Your tip</label>
+      <textarea id="suggest-content" placeholder="A short, practical piece of advice…"></textarea>
+    </div>
+    <div>
+      <label>Anecdote (optional)</label>
+      <textarea id="suggest-anecdote" placeholder="A short story or context for it…" style="min-height:70px"></textarea>
+    </div>
+    <div>
+      <label>Tags (optional, comma-separated)</label>
+      <input class="modal-tags-input" id="suggest-tags" type="text" placeholder="e.g. focus, morning" />
+    </div>
+    <div id="suggest-status" style="font-size:0.8rem;min-height:1em"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" id="suggest-cancel">Cancel</button>
+      <button class="btn" id="suggest-submit">Submit for review</button>
+    </div>
+  </div>
+</div>
+
+<!-- Review Submissions Modal (admin) -->
+<div class="overlay hidden" id="review-overlay">
+  <div class="modal" style="width:760px;max-width:96vw;max-height:92vh">
+    <h2>Review submissions</h2>
+    <p class="insights-sub">Community-suggested tips awaiting review. Edit the wording or tags (first tag = primary), then approve to add it to the collection — or reject.</p>
+    <div id="review-summary"></div>
+    <div id="review-list"></div>
+    <div id="review-status" style="font-size:0.8rem;color:var(--accent);min-height:1em"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" id="review-suggest-btn" style="margin-right:auto;display:none">✨ Suggest tags</button>
+      <button class="btn secondary" id="review-close">Close</button>
     </div>
   </div>
 </div>
