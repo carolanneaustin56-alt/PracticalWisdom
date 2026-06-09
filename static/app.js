@@ -1988,12 +1988,28 @@
   function openSuggest() {
     $("suggest-content").value = ""; $("suggest-anecdote").value = ""; $("suggest-tags").value = "";
     $("suggest-status").textContent = "";
+    $("suggest-history").innerHTML = "";
     $("suggest-overlay").classList.remove("hidden");
     $("suggest-content").focus();
+    loadSuggestHistory();
   }
   $("suggest-tip-btn").onclick = openSuggest;
   $("suggest-cancel").onclick = () => $("suggest-overlay").classList.add("hidden");
   dismissOnBackdrop("suggest-overlay");
+
+  async function loadSuggestHistory() {
+    const res = await api("GET", "/api/submissions/mine");
+    renderSuggestHistory((res && res.submissions) || []);
+  }
+  function renderSuggestHistory(subs) {
+    const wrap = $("suggest-history");
+    if (!subs.length) { wrap.innerHTML = ""; return; }
+    const label = s => s === "approved" ? "Added ✓" : (s === "rejected" ? "Not used" : "Pending");
+    wrap.innerHTML = `<div class="suggest-hist-label">Your recent suggestions</div>` +
+      subs.map(s =>
+        `<div class="suggest-hist-row"><span class="suggest-hist-text">${escHtml(s.content)}</span>` +
+        `<span class="sub-status ${s.status}">${label(s.status)}</span></div>`).join("");
+  }
 
   $("suggest-submit").onclick = async () => {
     const content = $("suggest-content").value.trim();
@@ -2004,8 +2020,12 @@
     const res = await api("POST", "/api/submissions", { content, anecdote, tags });
     $("suggest-submit").disabled = false;
     if (res.error) { $("suggest-status").style.color = "var(--danger)"; $("suggest-status").textContent = res.error; return; }
-    $("suggest-overlay").classList.add("hidden");
+    // keep the modal open so the user sees their tip land in the queue
+    $("suggest-content").value = ""; $("suggest-anecdote").value = ""; $("suggest-tags").value = "";
+    $("suggest-status").style.color = "var(--accent)";
+    $("suggest-status").textContent = "Thanks — your tip is in the review queue.";
     toast("Thanks! Your tip is in the review queue.");
+    loadSuggestHistory();
   };
 
   // ── Admin: moderation queue ──

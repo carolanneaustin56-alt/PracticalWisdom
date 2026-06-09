@@ -421,6 +421,31 @@ def test_reject_does_not_create_tip(client, app_module):
                        headers={"X-CSRF-Token": admin_token}).status_code == 409
 
 
+def test_my_submissions_anonymous_is_empty(client):
+    assert client.get("/api/submissions/mine").get_json() == {"submissions": []}
+
+
+def test_my_submissions_lists_only_own_with_status(client, app_module):
+    a = make_user(app_module, sub="a", email="a@e.com", name="A")
+    b = make_user(app_module, sub="b", email="b@e.com", name="B")
+    tok_a = login_user(client, a)
+    sub = client.post("/api/submissions", json={"content": "From A", "tags": ["moral"]},
+                      headers={"X-CSRF-Token": tok_a}).get_json()
+    tok_b = login_user(client, b)
+    client.post("/api/submissions", json={"content": "From B", "tags": ["moral"]},
+                headers={"X-CSRF-Token": tok_b})
+    # B sees only their own
+    mine_b = client.get("/api/submissions/mine").get_json()["submissions"]
+    assert [s["content"] for s in mine_b] == ["From B"]
+    # A sees their own; after approval its status flips to 'approved'
+    login_user(client, a)
+    assert client.get("/api/submissions/mine").get_json()["submissions"][0]["status"] == "pending"
+    admin_token = login_admin(client)
+    client.post(f"/api/submissions/{sub['id']}/approve", json={}, headers={"X-CSRF-Token": admin_token})
+    login_user(client, a)
+    assert client.get("/api/submissions/mine").get_json()["submissions"][0]["status"] == "approved"
+
+
 def test_me_reports_pending_count_for_admin(client, app_module):
     uid = make_user(app_module)
     token = login_user(client, uid)

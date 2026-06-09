@@ -605,6 +605,16 @@ label { display: block; font-size: 0.8rem; color: var(--text-secondary); font-we
 .advise-source-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-tertiary); margin-top: 6px; }
 .advise-tips { display: flex; flex-direction: column; gap: 8px; }
 
+/* ── "Your recent suggestions" list inside the Suggest modal ── */
+#suggest-history { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; }
+.suggest-hist-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-tertiary); margin: 4px 0 2px; }
+.suggest-hist-row { display: flex; align-items: center; gap: 10px; font-size: 0.85rem; }
+.suggest-hist-text { flex: 1; min-width: 0; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub-status { flex: none; font-size: 0.66rem; font-weight: 600; padding: 2px 9px; border-radius: var(--r-pill); }
+.sub-status.pending { background: var(--info-bg); color: var(--info-fg); }
+.sub-status.approved { background: var(--accent-tint-bg); color: var(--accent-tint-fg); }
+.sub-status.rejected { background: var(--danger-bg); color: var(--danger); }
+
 /* ── Favorites insights modal ── */
 .insights-sub { font-size: 0.82rem; color: var(--text-secondary); line-height: 1.5; margin: -2px 0 10px; }
 #insights-body { display: flex; flex-direction: column; gap: 6px; }

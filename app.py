@@ -873,6 +873,18 @@ def create_submission():
         return jsonify(_submission_json(conn, row)), 201
 
 
+@app.get("/api/submissions/mine")
+def my_submissions():
+    """The signed-in user's own submissions, with their review status (pending/approved/rejected)."""
+    uid = current_user_id()
+    if not uid:
+        return jsonify({"submissions": []})
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM tip_submissions WHERE user_id = ? ORDER BY created_at DESC LIMIT 50", (uid,)).fetchall()
+        return jsonify({"submissions": [_submission_json(conn, r) for r in rows]})
+
+
 @app.get("/api/submissions")
 @admin_required
 def list_submissions():
