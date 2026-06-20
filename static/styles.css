@@ -482,6 +482,15 @@ label { display: block; font-size: 0.8rem; color: var(--text-secondary); font-we
   transition: opacity 0.15s;
 }
 .cluster-label:hover { opacity: 1; }
+
+/* Overview region bubbles (one per primary tag; click to drill into its tips) */
+.region-bubble { cursor: pointer; }
+.region-bubble circle { transition: stroke-width 0.15s; }
+.region-bubble:hover circle { stroke-width: 4; }
+.region-count {
+  fill: #fff; font-weight: 800; font-size: 20px; text-anchor: middle; dominant-baseline: central;
+  paint-order: stroke; stroke: rgba(4,7,12,0.5); stroke-width: 3px; pointer-events: none;
+}
 .cluster-label.faded { opacity: 0.16; }
 
 .net-node-label {

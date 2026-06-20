@@ -976,17 +976,20 @@
   const FALLBACK_COLORS = ["#b5179e", "#80ed99", "#f8961e", "#43aa8b", "#f9c74f", "#577590"];
 
   const SVGNS = "http://www.w3.org/2000/svg";
-  const SIM = { REPEL: 2600, CLUSTER_PULL: 0.055, DAMP: 0.84 };
+  const SIM = { REPEL: 2600, CLUSTER_PULL: 0.055, DAMP: 0.84 };  // desktop full-network force sim
 
   const NET = {
     raf: null, nodes: [], edges: [], byId: {},
     canvas: null, ctx: null, svg: null,
-    gViewport: null, gLabels: null, gNodes: null, gNodeLabels: null,
+    gViewport: null, gLabels: null, gNodes: null, gNodeLabels: null, gRegions: null,
     cw: 0, ch: 0, dpr: 1, W: 0, H: 0,
     alpha: 0, transform: { x: 0, y: 0, k: 1 },
     selected: null, expr: null, defaultOp: "OR", linkTargets: [], suggested: null,
     visited: new Set(), prevSelected: null, focus: null, colorMap: {},
-    clusters: [], clusterByTag: {}, legendRows: {},
+    clusters: [], clusterByTag: {}, legendRows: {}, regionEdges: [],
+    // Drill-down level: "overview" shows one bubble per region; "focus" shows the tips of
+    // one region. Lets the network stay legible no matter how large the library grows.
+    level: "overview",
     // Network link mode: "tags" (shared-secondary-tag expression) or "related" (semantic
     // neighbours). relatedK caps how many nearest-by-meaning links to draw. Persisted.
     linkMode: (() => { try { return localStorage.getItem("netLinkMode") || "tags"; } catch (e) { return "tags"; } })(),
@@ -1053,6 +1056,16 @@
       NET.edges.push({ a, b, w });
     });
 
+    // Roll those tip-tip edges up to region-region weights, for the overview's links.
+    const regW = new Map();
+    NET.edges.forEach(e => {
+      const ra = primaryTagOf(NET.byId[e.a].tip), rb = primaryTagOf(NET.byId[e.b].tip);
+      if (!ra || !rb || ra === rb) return;
+      const key = ra < rb ? ra + "|" + rb : rb + "|" + ra;
+      regW.set(key, (regW.get(key) || 0) + e.w);
+    });
+    NET.regionEdges = [...regW].map(([key, w]) => { const [a, b] = key.split("|"); return { a, b, w }; });
+
     NET.selected = null;
     NET.prevSelected = null;
     NET.focus = null;
@@ -1062,9 +1075,9 @@
     renderNetworkDom();
     renderLegend();
     NET.transform = { x: 0, y: 0, k: 1 };
-    applyTransform();
-    resetHint();
-    startSim();
+    // Phones get the region overview (drill-down keeps it legible on a small screen);
+    // desktop keeps the full force-directed network, which the wider canvas handles well.
+    if (isMobileNet()) showOverview(); else showFull();
   }
 
   // One cluster per primary tag, arranged evenly on a ring around the centre.
@@ -1084,7 +1097,7 @@
         tag, color: NET.colorMap[tag], count: counts[tag],
         x: single ? cx : cx + Math.cos(ang) * Rx,
         y: single ? cy : cy + Math.sin(ang) * Ry,
-        radius: 24 + Math.sqrt(counts[tag]) * 9,
+        radius: 18 + Math.sqrt(counts[tag]) * 6,
         labelEl: null,
       };
     });
@@ -1110,13 +1123,29 @@
   function renderNetworkDom() {
     NET.svg.innerHTML = "";
     NET.gViewport = document.createElementNS(SVGNS, "g");
+    NET.gRegions = document.createElementNS(SVGNS, "g");   // overview: one bubble per region
     NET.gLabels = document.createElementNS(SVGNS, "g");
     NET.gNodes = document.createElementNS(SVGNS, "g");
     NET.gNodeLabels = document.createElementNS(SVGNS, "g");
-    NET.gViewport.append(NET.gLabels, NET.gNodes, NET.gNodeLabels);
+    NET.gViewport.append(NET.gRegions, NET.gNodes, NET.gNodeLabels, NET.gLabels);
     NET.svg.appendChild(NET.gViewport);
 
     NET.clusters.forEach(c => {
+      // Region bubble (overview level): a translucent disc sized by tip count, tap to drill in.
+      const g = document.createElementNS(SVGNS, "g");
+      g.setAttribute("class", "region-bubble");
+      g.addEventListener("click", e => { e.stopPropagation(); toggleFocus(c.tag); });
+      const disc = document.createElementNS(SVGNS, "circle");
+      disc.setAttribute("cx", c.x); disc.setAttribute("cy", c.y); disc.setAttribute("r", c.radius);
+      disc.setAttribute("fill", hexToRgba(c.color, 0.20));
+      disc.setAttribute("stroke", c.color); disc.setAttribute("stroke-width", "2");
+      const cnt = document.createElementNS(SVGNS, "text");
+      cnt.setAttribute("x", c.x); cnt.setAttribute("y", c.y);
+      cnt.setAttribute("class", "region-count"); cnt.textContent = c.count;
+      g.append(disc, cnt);
+      c.bubbleEl = g;
+      NET.gRegions.appendChild(g);
+
       const t = document.createElementNS(SVGNS, "text");
       t.setAttribute("class", "cluster-label");
       t.textContent = c.tag;
@@ -1182,6 +1211,22 @@
     const ctx = NET.ctx, dpr = NET.dpr, { x, y, k } = NET.transform;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, NET.cw, NET.ch);
+    // Overview: faint links between region bubbles, weighted by how many tips they share.
+    if (NET.level === "overview") {
+      if (!NET.regionEdges.length) return;
+      ctx.setTransform(k * dpr, 0, 0, k * dpr, x * dpr, y * dpr);
+      ctx.lineCap = "round";
+      const maxW = NET.regionEdges.reduce((m, e) => Math.max(m, e.w), 1);
+      NET.regionEdges.forEach(e => {
+        const A = NET.clusterByTag[e.a], B = NET.clusterByTag[e.b];
+        if (!A || !B) return;
+        const t = e.w / maxW;
+        ctx.lineWidth = (1 + t * 5) / k;
+        ctx.strokeStyle = `rgba(255,255,255,${0.05 + t * 0.16})`;
+        ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); ctx.stroke();
+      });
+      return;
+    }
     const sel = NET.selected;
     if (sel == null || (!NET.linkTargets.length && NET.suggested == null)) return;
     ctx.setTransform(k * dpr, 0, 0, k * dpr, x * dpr, y * dpr);
@@ -1205,7 +1250,7 @@
     }
   }
 
-  // ── Force simulation: repulsion + a pull toward each node's region centre ──
+  // ── Force simulation (desktop full-network view): repulsion + pull to region centre ──
   function startSim() {
     cancelAnimationFrame(NET.raf);
     NET.alpha = 1;
@@ -1218,7 +1263,7 @@
         NET.raf = requestAnimationFrame(step);
       } else {
         NET.raf = null;
-        fitTo(NET.focus ? focusedNodes() : NET.nodes);  // tidy final framing
+        frameCurrentLevel();  // tidy final framing
       }
     };
     NET.raf = requestAnimationFrame(step);
@@ -1330,6 +1375,9 @@
         .filter(m => m.id !== selId && exprMatches(m.tip.tags))
         .map(m => m.id);
     }
+    // In a focused region we only draw links to tips within that region (cross-region
+    // structure is shown at the overview level instead).
+    if (isMobileNet() && NET.level === "focus") targets = targets.filter(id => primaryTagOf(NET.byId[id].tip) === NET.focus);
     NET.linkTargets = targets;
     NET.suggested = pickSuggestedFor(selId, targets);
     const keep = new Set([selId, ...targets]);
@@ -1430,8 +1478,8 @@
     hideCard();
     drawCanvas();
     resetHint();
-    // On a phone, the card just freed its space — reframe to the whole (or focused) network.
-    if (isMobileNet()) fitTo(NET.focus ? focusedNodes() : NET.nodes);
+    // On a phone, the card just freed its space — reframe to the focused region.
+    if (isMobileNet()) frameCurrentLevel();
   }
 
   // ── Selected-tip card: full text + tag-expression builder ──
@@ -1545,26 +1593,98 @@
       `Links where <b>${escHtml(expr)}</b> — <b>${c}</b> tip${c !== 1 ? "s" : ""}${sug} · click tags to include/leave out, OR/AND to switch`;
   }
 
-  // ── Focus a region (fade the rest, zoom to fit) ──
+  // ── Drill-down levels: region overview ⇄ one region's tips ──
   const focusedNodes = () => NET.nodes.filter(m => primaryTagOf(m.tip) === NET.focus);
 
-  function toggleFocus(tag) { NET.focus === tag ? clearFocus() : focusCluster(tag); }
+  // Pseudo-nodes at the region bubbles, so fitTo can frame the overview constellation.
+  const regionPoints = () => NET.clusters.map(c => ({ x: c.x, y: c.y, r: c.radius + 22 }));
 
-  function focusCluster(tag) {
+  function frameCurrentLevel() {
+    if (NET.level === "overview") fitTo(regionPoints());
+    else if (NET.level === "full") fitTo(NET.nodes);
+    else fitTo(focusedNodes());
+  }
+
+  // Clicking a region: phones drill into it (overview ⇄ focus); desktop just spotlights it
+  // within the full network (full ⇄ focus).
+  function toggleFocus(tag) {
+    if (isMobileNet()) {
+      (NET.level === "focus" && NET.focus === tag) ? showOverview() : showFocus(tag);
+    } else {
+      (NET.level === "focus" && NET.focus === tag) ? showFull() : desktopFocus(tag);
+    }
+  }
+
+  // Overview: just the region bubbles (+ their links). Individual tips are hidden.
+  function showOverview() {
     if (NET.selected != null) clearNetSelection();
-    NET.focus = tag;
-    NET.nodes.forEach(m => m.el.classList.toggle("faded", primaryTagOf(m.tip) !== tag));
-    NET.clusters.forEach(c => c.labelEl.classList.toggle("faded", c.tag !== tag));
+    NET.level = "overview"; NET.focus = null;
+    NET.gNodes.style.display = "none"; NET.gNodeLabels.style.display = "none";
+    NET.gRegions.style.display = "";
+    NET.clusters.forEach(c => { c.labelEl.style.display = ""; c.labelEl.classList.remove("faded"); });
+    Object.values(NET.legendRows).forEach(el => el.classList.remove("active"));
+    fitTo(regionPoints());
+    resetHint();
+  }
+
+  // Focus: drill into one region — only its tips show.
+  function applyFocusVisibility() {
+    NET.nodes.forEach(m => { m.el.style.display = primaryTagOf(m.tip) === NET.focus ? "" : "none"; });
+  }
+
+  // Lay a region's tips out as an even golden-angle disc. They were positioned in the
+  // context of the whole network, so on their own they'd look lopsided; this spreads them
+  // evenly (and means we never run the O(n²) force sim, so it scales to any library size).
+  function layoutRegion(tag) {
+    const c = NET.clusterByTag[tag] || { x: NET.W / 2, y: NET.H / 2 };
+    const ns = NET.nodes.filter(m => primaryTagOf(m.tip) === tag);
+    for (let i = ns.length - 1; i > 0; i--) {   // shuffle so Re-layout gives a fresh arrangement
+      const j = Math.floor(Math.random() * (i + 1)); [ns[i], ns[j]] = [ns[j], ns[i]];
+    }
+    const GA = Math.PI * (3 - Math.sqrt(5));     // golden angle → even sunflower packing
+    const a = Math.sqrt(Math.max(NET.H, 1) / Math.max(NET.W, 1));  // gently match the viewport
+    ns.forEach((m, i) => {
+      const r = 30 * Math.sqrt(i + 0.5);
+      m.x = c.x + Math.cos(i * GA) * r / a; m.y = c.y + Math.sin(i * GA) * r * a;
+    });
+    positionNodes();
+  }
+
+  function showFocus(tag) {
+    if (NET.selected != null) clearNetSelection();
+    stopSim();
+    NET.level = "focus"; NET.focus = tag;
+    NET.gRegions.style.display = "none";
+    NET.gNodes.style.display = ""; NET.gNodeLabels.style.display = "";
+    applyFocusVisibility();
+    layoutRegion(tag);
+    NET.clusters.forEach(c => { c.labelEl.style.display = c.tag === tag ? "" : "none"; });
     Object.entries(NET.legendRows).forEach(([t, el]) => el.classList.toggle("active", t === tag));
     fitTo(focusedNodes());
     resetHint();
   }
 
-  function clearFocus() {
-    NET.focus = null;
-    NET.nodes.forEach(m => m.el.classList.remove("faded"));
-    NET.clusters.forEach(c => c.labelEl.classList.remove("faded"));
+  // ── Desktop: the full force-directed network (all tips at once) ──
+  function showFull() {
+    if (NET.selected != null) clearNetSelection();
+    NET.level = "full"; NET.focus = null;
+    NET.gRegions.style.display = "none";
+    NET.gNodes.style.display = ""; NET.gNodeLabels.style.display = "";
+    NET.nodes.forEach(m => { m.el.style.display = ""; m.el.classList.remove("faded"); });
+    NET.clusters.forEach(c => { c.labelEl.style.display = ""; c.labelEl.classList.remove("faded"); });
     Object.values(NET.legendRows).forEach(el => el.classList.remove("active"));
+    startSim();   // lays out every node; settles, then frames the whole network
+    resetHint();
+  }
+
+  // Desktop "focus a region": fade the rest (keep them on screen for context), zoom to fit.
+  function desktopFocus(tag) {
+    if (NET.selected != null) clearNetSelection();
+    NET.level = "focus"; NET.focus = tag;
+    NET.nodes.forEach(m => { m.el.style.display = ""; m.el.classList.toggle("faded", primaryTagOf(m.tip) !== tag); });
+    NET.clusters.forEach(c => { c.labelEl.style.display = ""; c.labelEl.classList.toggle("faded", c.tag !== tag); });
+    Object.entries(NET.legendRows).forEach(([t, el]) => el.classList.toggle("active", t === tag));
+    fitTo(focusedNodes());
     resetHint();
   }
 
@@ -1605,9 +1725,10 @@
     const ins = viewInsets();
     const availW = Math.max(60, NET.W - ins.left - ins.right);
     const availH = Math.max(60, NET.H - ins.top - ins.bottom);
-    // More horizontal room (the left/right region labels point outward and must not clip);
-    // less vertical, so the cloud still fills a tall phone screen.
-    const padX = Math.min(80, NET.W * 0.12), padY = Math.min(50, NET.H * 0.04);
+    // Overview needs extra horizontal room so the left/right region labels don't clip; a
+    // focused region only has one centred label, so it can use the width.
+    const padX = NET.level === "overview" ? Math.min(80, NET.W * 0.12) : Math.min(40, NET.W * 0.06);
+    const padY = Math.min(50, NET.H * 0.04);
     const bw = (maxx - minx) + padX * 2, bh = (maxy - miny) + padY * 2;
     const k = Math.max(0.35, Math.min(2.4, Math.min(availW / bw, availH / bh)));
     const ccx = (minx + maxx) / 2, ccy = (miny + maxy) / 2;
@@ -1623,10 +1744,10 @@
       loadTips("");
       loadSidebar();
       buildNetwork();
+    } else if (isMobileNet()) {
+      showOverview();   // phones: back out to the region overview (clears selection + focus)
     } else {
-      clearNetSelection();
-      clearFocus();
-      fitTo(NET.nodes);
+      showFull();       // desktop: clear selection + focus, show the whole network
     }
   }
 
@@ -1634,8 +1755,11 @@
   function resetHint() {
     if (activeTags.length) {
       $("net-hint").innerHTML = `Filtered to <b>#${escHtml(activeTags.join(" · #"))}</b> — <b>Reset view</b> brings back all tips`;
-    } else if (NET.focus) {
-      $("net-hint").innerHTML = `Focused on <b>${escHtml(NET.focus)}</b> — click a node for details · Reset to zoom out`;
+    } else if (NET.level === "focus") {
+      const tail = isMobileNet() ? "<b>Reset</b> for all regions" : "Reset to zoom out";
+      $("net-hint").innerHTML = `Exploring <b>${escHtml(NET.focus)}</b> — click a tip for its links · ${tail}`;
+    } else if (NET.level === "overview") {
+      $("net-hint").innerHTML = `Each bubble is a region — <b>click one</b> to explore its tips · scroll to zoom · drag to pan`;
     } else {
       $("net-hint").innerHTML = `Click a <b>region</b> to focus it · click a <b>node</b> for its links &amp; details · scroll to zoom · drag to pan`;
     }
@@ -2287,7 +2411,11 @@
   $("linkmode-tags").onclick = () => setLinkMode("tags");
   $("linkmode-related").onclick = () => setLinkMode("related");
   $("net-reset").onclick = resetView;
-  $("net-relayout").onclick = () => { scatterNodes(); startSim(); };
+  // Re-layout reshuffles the tips of the region you're exploring (no-op in the overview).
+  $("net-relayout").onclick = () => {
+    if (isMobileNet()) { if (NET.level === "focus") { layoutRegion(NET.focus); fitTo(focusedNodes()); } }
+    else { scatterNodes(); startSim(); }   // desktop: re-run the force layout
+  };
   $("net-clear-history").onclick = async () => {
     NET.visited = new Set();
     NET.prevSelected = null;
@@ -2316,7 +2444,7 @@
     // the panel just resized to/from the whole screen — re-sync the layers and reframe
     if (currentView === "network" && NET.nodes.length) {
       sizeNetwork();
-      fitTo(NET.focus ? focusedNodes() : NET.nodes);
+      frameCurrentLevel();
     }
   }
   document.addEventListener("fullscreenchange", onFullscreenChange);
@@ -2335,7 +2463,7 @@
     const rect = $("network-view").getBoundingClientRect();
     if (rect.width < 5 || rect.height < 5) return;  // hidden / mid-transition
     sizeNetwork();
-    fitTo(NET.focus ? focusedNodes() : NET.nodes);  // reframe to the new box, keep layout
+    frameCurrentLevel();  // reframe to the new box, keep layout
   }
   if (window.ResizeObserver) {
     new ResizeObserver(onNetResize).observe($("network-view"));
