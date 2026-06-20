@@ -8,13 +8,14 @@
   let cardBackStack = [];    // card view: previously shown tips (for Back)
   let currentUser = null;    // {id,name,email,picture} when signed in, else null
   let authEnabled = false;   // whether Google login is configured on the server
-  let favoritesOnly = false; // show only the signed-in user's favorites
   let isAdmin = false;       // administrator session (unlocks List view + management)
   let embeddingsEnabled = false; // whether semantic features (search/recommender) are available
   let llmEnabled = false;    // whether text-generation features (tags/advice) are available
   let pendingCount = 0;      // submissions awaiting review (admins only)
   let searchActive = false;  // showing semantic-search results instead of the current view
   let lastSearch = { q: "", results: [] };
+  // How the search field interprets the query: "keyword" (full-text) or "meaning" (semantic).
+  let searchMode = (() => { try { return localStorage.getItem("searchMode") || "keyword"; } catch (e) { return "keyword"; } })();
   // How the "next suggested tip" is chosen: "tags" (shared secondary tags) or "meaning"
   // (semantic similarity via embeddings). Persisted; only effective when embeddings are on.
   let suggestMode = (() => { try { return localStorage.getItem("suggestMode") || "meaning"; } catch (e) { return "meaning"; } })();
@@ -57,8 +58,7 @@
     embeddingsEnabled = !!data.embeddings_enabled;
     llmEnabled = !!data.llm_enabled;
     pendingCount = data.pending_submissions || 0;
-    const sb = $("smart-search-btn");
-    if (sb) sb.style.display = embeddingsEnabled ? "" : "none";
+    updateSearchModeUI();
     const ab = $("view-advise");
     if (ab) ab.style.display = embeddingsEnabled ? "" : "none";
     updateSuggestModeButtons();
@@ -105,6 +105,9 @@
     } else if (authEnabled) {
       parts.push(`<a class="btn google-btn" href="/login">Sign in with Google</a>`);
     }
+    if (currentUser) {   // a signed-in user can suggest a tip — sits next to Admin, top right
+      parts.push(`<button class="btn secondary" id="suggest-tip-btn" title="Suggest a tip for review">✍ Suggest a tip</button>`);
+    }
     if (isAdmin) {
       parts.push(`<span class="admin-badge" title="Administrator">ADMIN</span>` +
         `<button class="btn secondary" id="admin-logout-btn">Exit admin</button>`);
@@ -112,24 +115,27 @@
       parts.push(`<button class="btn secondary" id="admin-open-btn">Admin</button>`);
     }
     el.innerHTML = parts.join("");
-    if (currentUser) $("logout-btn").onclick = googleSignOut;
+    if (currentUser) {
+      $("logout-btn").onclick = googleSignOut;
+      $("suggest-tip-btn").onclick = openSuggest;
+    }
     if (isAdmin) $("admin-logout-btn").onclick = adminSignOut;
     else $("admin-open-btn").onclick = openAdminModal;
-    const favBtn = $("favorites-btn");
-    if (favBtn) favBtn.style.display = currentUser ? "" : "none";
-    const sugBtn = $("suggest-tip-btn");
-    if (sugBtn) sugBtn.style.display = currentUser ? "" : "none";
+    const favTab = $("view-favorites");
+    if (favTab) favTab.style.display = currentUser ? "" : "none";   // Favorites is a main view, signed-in only
   }
 
   // Show/hide List view + management based on role, then render the right view.
   function applyRolePermissions() {
-    $("view-toggle").style.display = "flex";              // Network + Cards for everyone
+    $("view-toggle").style.display = "flex";              // Network + Cards + Ask for everyone
     $("view-list").style.display = isAdmin ? "" : "none"; // List is admin-only
     $("mgmt-wrap").style.display = isAdmin ? "" : "none";
+    if (!isAdmin) { activeTags = []; selectedTip = null; } // no sidebar to manage a tag filter
     closeMgmtMenu();
-    loadSidebar();
+    loadSidebar();                                        // still populates allTags (network tiers)
     let v = currentView;
     if (!isAdmin && v === "list") v = "network";          // non-admins can't use List
+    if (!currentUser && v === "favorites") v = "network"; // Favorites needs a signed-in user
     setView(v);
   }
 
@@ -137,9 +143,8 @@
     await api("POST", "/logout");
     currentUser = null;
     NET.visited = new Set(); NET.prevSelected = null;  // don't carry memory to the next user
-    if (favoritesOnly) toggleFavorites(false);
     await loadMe();
-    applyRolePermissions();
+    applyRolePermissions();   // drops the Favorites view if it was active (see applyRolePermissions)
   }
 
   async function adminSignOut() {
@@ -207,12 +212,6 @@
            `<button class="vote-btn down${tip.my_vote === -1 ? " on" : ""}" title="Downvote" aria-label="Downvote">▼</button>`;
   }
 
-  function toggleFavorites(force) {
-    favoritesOnly = force === undefined ? !favoritesOnly : force;
-    const btn = $("favorites-btn");
-    if (btn) btn.classList.toggle("active", favoritesOnly);
-    renderCurrentView();
-  }
 
   let toastTimer;
   function toast(msg) {
@@ -325,7 +324,6 @@
   async function loadTips(tags = "") {
     const params = [];
     if (tags) params.push("tags=" + encodeURIComponent(tags));
-    if (favoritesOnly) params.push("favorites=1");
     const url = "/api/tips" + (params.length ? "?" + params.join("&") : "");
     $("tip-list").innerHTML = SPINNER;
     const tips = await api("GET", url);
@@ -337,9 +335,7 @@
     const list = $("tip-list");
     list.innerHTML = "";
     if (!tips.length) {
-      list.innerHTML = `<div id="empty-state">${favoritesOnly
-        ? "No favorites yet — upvote a tip (▲) to save it."
-        : "No tips match these filters."}</div>`;
+      list.innerHTML = `<div id="empty-state">No tips match these filters.</div>`;
       return;
     }
     tips.forEach(tip => {
@@ -354,8 +350,7 @@
         </div>
         <div class="tip-main"><div class="tip-content">${escHtml(tip.content)}</div></div>`;
       card.onclick = () => selectTip(tip);
-      // In the favorites view, removing your upvote drops the card from the list.
-      bindTipControls(card, tip, () => { if (favoritesOnly && !tip.favorited) loadTips(activeTags.join(",")); });
+      bindTipControls(card, tip);
       list.appendChild(card);
     });
   }
@@ -379,11 +374,39 @@
     renderPendingTags();
     renderTagPalette();
     $("save-status").textContent = "";
+    renderVideoEditor(tip);   // the admin's attach-a-video field + preview
     // highlight the matching card in the list (works for clicks and programmatic calls)
     document.querySelectorAll(".tip-card").forEach(c => {
       c.classList.toggle("selected", Number(c.dataset.id) === tip.id);
     });
   }
+
+  // ── Video: a responsive 16:9 embed, and the admin attach field in the detail pane ──
+  function videoEmbedHtml(src) {
+    return `<div class="video-embed"><iframe src="${src}" title="Video" frameborder="0"
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+      allowfullscreen></iframe></div>`;
+  }
+  function renderVideoEditor(tip) {
+    $("video-url-input").value = tip.video_url || "";
+    $("video-status").textContent = "";
+    $("video-status").style.color = "var(--accent)";
+    $("video-preview").innerHTML = tip.video_embed ? videoEmbedHtml(tip.video_embed) : "";
+    $("video-remove-btn").style.display = tip.video_url ? "" : "none";
+  }
+  $("video-save-btn").onclick = async () => {
+    if (!selectedTip) return;
+    const url = $("video-url-input").value.trim();
+    const r = await api("POST", `/api/tips/${selectedTip.id}/video`, { video_url: url });
+    if (r.error) { $("video-status").style.color = "var(--danger)"; $("video-status").textContent = r.error; return; }
+    selectedTip = r;
+    renderVideoEditor(r);
+    $("video-status").textContent = url ? "Video attached." : "Video removed.";
+  };
+  $("video-remove-btn").onclick = async () => {
+    $("video-url-input").value = "";
+    $("video-save-btn").click();
+  };
 
   function renderPendingTags() {
     const container = $("current-tags");
@@ -446,10 +469,31 @@
   };
 
   // ── Search ────────────────────────────────────────────────────
-  // The text box searches the actual words of tips ("Search" → full-text via FTS5); "✨ Meaning"
-  // ranks by semantic similarity. Filtering by tag is done from the sidebar, independent of this.
-  $("search-btn").onclick = runTextSearch;
-  $("search-input").onkeydown = e => { if (e.key === "Enter") runTextSearch(); };
+  // One field, two modes chosen by the inline toggle: "Keyword" (full-text via FTS5) or
+  // "Meaning" (semantic similarity). Enter or the magnifier runs the search in the active mode;
+  // clicking a mode switches and re-runs it. Tag filtering lives on the sidebar, independent.
+  function updateSearchModeUI() {
+    if (!embeddingsEnabled && searchMode === "meaning") searchMode = "keyword";  // semantic needs the model
+    const mm = $("mode-meaning");
+    if (mm) mm.style.display = embeddingsEnabled ? "" : "none";
+    const mk = $("mode-keyword");
+    if (mk) mk.classList.toggle("active", searchMode === "keyword");
+    if (mm) mm.classList.toggle("active", searchMode === "meaning");
+  }
+  function runSearch() {
+    if (searchMode === "meaning" && embeddingsEnabled) runSemanticSearch();
+    else runTextSearch();
+  }
+  function setSearchMode(mode, andRun) {
+    searchMode = mode;
+    try { localStorage.setItem("searchMode", mode); } catch (e) {}
+    updateSearchModeUI();
+    if (andRun && $("search-input").value.trim()) runSearch();
+  }
+  $("search-go").onclick = runSearch;
+  $("search-input").onkeydown = e => { if (e.key === "Enter") runSearch(); };
+  $("mode-keyword").onclick = () => setSearchMode("keyword", true);
+  $("mode-meaning").onclick = () => setSearchMode("meaning", true);
 
   function showOnlySearchPanel() {
     ["tip-list", "network-view", "card-view", "fav-list", "advise-view"].forEach(id => { $(id).style.display = "none"; });
@@ -529,8 +573,6 @@
     $("search-results").style.display = "none";
     renderCurrentView();
   }
-
-  $("smart-search-btn").onclick = runSemanticSearch;
 
   // ── Add / Edit Tip modal ──────────────────────────────────────
   $("add-tip-btn").onclick = () => {
@@ -987,7 +1029,6 @@
     const tagStr = activeTags.join(",");
     const params = [];
     if (tagStr) params.push("tags=" + encodeURIComponent(tagStr));
-    if (favoritesOnly) params.push("favorites=1");
     $("net-loading").classList.remove("hidden");
     const tips = await api("GET", "/api/tips" + (params.length ? "?" + params.join("&") : ""));
     $("net-loading").classList.add("hidden");
@@ -1656,7 +1697,6 @@
     const tagStr = activeTags.join(",");
     const params = [];
     if (tagStr) params.push("tags=" + encodeURIComponent(tagStr));
-    if (favoritesOnly) params.push("favorites=1");
     const tips = await api("GET", "/api/tips" + (params.length ? "?" + params.join("&") : ""));
     if (!Array.isArray(tips)) return false;
     NET.nodes = tips.map(tip => ({ id: tip.id, tip }));
@@ -1715,9 +1755,7 @@
   }
 
   function renderCardEmpty() {
-    $("cv-content").textContent = favoritesOnly
-      ? "No favorites yet — upvote a tip (▲) to save it."
-      : "No tips to show.";
+    $("cv-content").textContent = "No tips to show.";
     $("cv-anecdote").textContent = "";
     $("cv-tags").innerHTML = "";
     $("cv-actions").innerHTML = "";
@@ -1839,6 +1877,7 @@
     $("view-network").classList.toggle("active", v === "network");
     $("view-cards").classList.toggle("active", v === "cards");
     $("view-advise").classList.toggle("active", v === "advise");
+    $("view-favorites").classList.toggle("active", v === "favorites");
     renderCurrentView();
   }
 
@@ -1848,18 +1887,23 @@
     searchActive = false;                 // any normal view render leaves semantic-search mode
     $("search-results").style.display = "none";
     const v = currentView;
-    const favMode = favoritesOnly && (v === "network" || v === "cards");
+    // The three-pane List layout (tag sidebar + list + detail) only appears in the List view,
+    // and only for admins. Every other view is clean, full-width main content.
+    const listPanes = isAdmin && v === "list";
+    $("sidebar").style.display = listPanes ? "" : "none";
+    if (!listPanes) $("detail-pane").classList.add("hidden");
+    if (v !== "favorites") closeFavAnalysis();   // the "explore this tip" pane is favorites-only
     $("tip-list").style.display = v === "list" ? "flex" : "none";
-    $("network-view").style.display = (v === "network" && !favMode) ? "block" : "none";
-    $("card-view").style.display = (v === "cards" && !favMode) ? "flex" : "none";
+    $("network-view").style.display = v === "network" ? "block" : "none";
+    $("card-view").style.display = v === "cards" ? "flex" : "none";
     $("advise-view").style.display = v === "advise" ? "flex" : "none";
-    $("fav-list").style.display = favMode ? "flex" : "none";
-    if (v !== "network" || favMode) { stopSim(); $("net-tooltip").style.display = "none"; }
-    if (favMode) renderFavList();
+    $("fav-list").style.display = v === "favorites" ? "flex" : "none";
+    if (v !== "network") { stopSim(); $("net-tooltip").style.display = "none"; }
+    if (v === "favorites") renderFavList();
     else if (v === "network") buildNetwork();
     else if (v === "cards") enterCardView();
     else if (v === "advise") enterAdviseView();
-    else loadTips(activeTags.join(","));
+    else if (v === "list") loadTips(activeTags.join(","));
   }
 
   // Vertical, scrollable list of the user's favourite tips (with vote controls).
@@ -1895,11 +1939,64 @@
           <div class="tip-content">${escHtml(tip.content)}</div>
           ${tip.tags.length ? `<div class="tip-tags">${tip.tags.map(t => `<span class="chip">${escHtml(t)}</span>`).join("")}</div>` : ""}
         </div>`;
+      card.dataset.id = tip.id;
+      card.classList.toggle("selected", selectedFav?.id === tip.id);
+      card.onclick = () => openFavAnalysis(tip);   // open the analysis pane (vote clicks stopPropagation)
       // removing your upvote drops it from favourites → re-render the list
       bindTipControls(card, tip, () => { if (!tip.favorited) renderFavList(); });
       list.appendChild(card);
     });
+    if (selectedFav && !tips.some(t => t.id === selectedFav.id)) closeFavAnalysis();
   }
+
+  // ── "Explore this tip" pane (Favorites view): pick an analysis lens, generated on demand ──
+  let selectedFav = null;
+  const ANALYSIS_LABELS = {
+    apply: "How to apply it in typical situations",
+    avoid: "When not to apply it",
+    opposing: "Opposing wisdom",
+    misreadings: "Common misreadings",
+    figures: "Notable figures who applied it",
+  };
+
+  function openFavAnalysis(tip) {
+    selectedFav = tip;
+    $("analysis-tip").textContent = tip.content;
+    $("analysis-video").innerHTML = tip.video_embed ? videoEmbedHtml(tip.video_embed) : "";  // further info
+    document.querySelectorAll(".analysis-opt").forEach(b => {
+      b.classList.remove("active");
+      b.disabled = !llmEnabled;
+    });
+    $("analysis-result").innerHTML = llmEnabled
+      ? `<div class="analysis-hint">Pick an angle above to generate an analysis of this tip.</div>`
+      : `<div class="analysis-hint">AI analysis isn't configured.</div>`;
+    $("analysis-pane").classList.remove("hidden");
+    document.querySelectorAll("#fav-list .tip-card").forEach(c =>
+      c.classList.toggle("selected", Number(c.dataset.id) === tip.id));
+  }
+
+  async function runFavAnalysis(lens, btn) {
+    if (!selectedFav) return;
+    document.querySelectorAll(".analysis-opt").forEach(b => b.classList.toggle("active", b === btn));
+    const out = $("analysis-result");
+    const heading = `<div class="analysis-label">${escHtml(ANALYSIS_LABELS[lens] || "")}</div>`;
+    out.innerHTML = heading + `<div class="advise-thinking">${SPINNER}<span>Thinking it through…</span></div>`;
+    const res = await api("POST", `/api/tips/${selectedFav.id}/analyze`, { lens });
+    if (res.error) { out.innerHTML = heading + ERR(res.error); return; }
+    const points = res.points || [];
+    out.innerHTML = heading + (points.length
+      ? `<ul class="analysis-list">${points.map(p => `<li>${escHtml(p)}</li>`).join("")}</ul>`
+      : `<div class="analysis-hint">No analysis came back — try another angle.</div>`);
+  }
+
+  function closeFavAnalysis() {
+    selectedFav = null;
+    $("analysis-pane").classList.add("hidden");
+    document.querySelectorAll("#fav-list .tip-card").forEach(c => c.classList.remove("selected"));
+  }
+
+  $("analysis-close").onclick = closeFavAnalysis;
+  document.querySelectorAll(".analysis-opt").forEach(b => { b.onclick = () => runFavAnalysis(b.dataset.lens, b); });
 
   // ════════════════ Ask-for-advice view (RAG) ═══════════════════
   // The user describes a situation; the server retrieves the most relevant tips by meaning
@@ -1999,7 +2096,7 @@
     $("suggest-content").focus();
     loadSuggestHistory();
   }
-  $("suggest-tip-btn").onclick = openSuggest;
+  // the "Suggest a tip" button is rendered in the header (next to Admin) by renderAuth.
   $("suggest-cancel").onclick = () => $("suggest-overlay").classList.add("hidden");
   dismissOnBackdrop("suggest-overlay");
 
@@ -2216,7 +2313,7 @@
     window.addEventListener("resize", onNetResize);
   }
 
-  $("favorites-btn").onclick = () => toggleFavorites();
+  $("view-favorites").onclick = () => setView("favorites");
 
   // Admin login modal
   $("admin-cancel").onclick = () => $("admin-overlay").classList.add("hidden");

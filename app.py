@@ -185,6 +185,27 @@ def will_have_primary(conn, tag_names):
     return False
 
 
+def video_embed(url):
+    """Turn a YouTube / Vimeo / Cloudflare Stream URL into an embeddable player src.
+
+    Returns the iframe src, or None if the URL isn't a recognised video link. We only ever build
+    the src from an id captured out of a known host, so the result is safe to drop into an iframe.
+    """
+    url = (url or "").strip()
+    if not url:
+        return None
+    m = re.search(r"(?:youtube\.com/(?:watch\?v=|embed/|shorts/|v/)|youtu\.be/)([A-Za-z0-9_-]{6,})", url)
+    if m:
+        return "https://www.youtube-nocookie.com/embed/%s?rel=0" % m.group(1)
+    m = re.search(r"vimeo\.com/(?:video/)?(\d+)", url)
+    if m:
+        return "https://player.vimeo.com/video/%s" % m.group(1)
+    m = re.search(r"cloudflarestream\.com/([A-Za-z0-9]+)", url)
+    if m:
+        return "https://iframe.cloudflarestream.com/%s" % m.group(1)
+    return None
+
+
 def tip_with_tags(conn, tip_id):
     tip = conn.execute("SELECT * FROM tips WHERE id = ?", (tip_id,)).fetchone()
     if not tip:
@@ -205,6 +226,7 @@ def tip_with_tags(conn, tip_id):
         ).fetchone()
         my_vote = v["value"] if v else 0
     favorited = my_vote == 1  # a tip is "favorited" exactly when the user has upvoted it
+    video_url = tip["video_url"] or ""
     return {
         "id": tip["id"],
         "content": tip["content"],
@@ -213,6 +235,8 @@ def tip_with_tags(conn, tip_id):
         "score": score,
         "my_vote": my_vote,
         "favorited": favorited,
+        "video_url": video_url,
+        "video_embed": video_embed(video_url),
     }
 
 
@@ -392,6 +416,26 @@ def related_tips(tip_id):
         return jsonify({"enabled": True, "related": embeddings.neighbors(conn, tip_id, k=k)})
 
 
+@app.post("/api/tips/<int:tip_id>/analyze")
+def analyze_tip_lens(tip_id):
+    """Analyse one tip through a chosen lens (how to apply, when not to, opposing wisdom, common
+    misreadings, notable figures). On-demand — the caller picks the lens. Returns {"points": [...]}.
+    """
+    if not llm.is_enabled():
+        return jsonify({"error": "AI analysis isn't configured (set GROQ_API_KEY)."}), 503
+    lens = ((request.get_json(force=True) or {}).get("lens") or "").strip()
+    if lens not in llm.ANALYSIS_LENSES:
+        return jsonify({"error": "Unknown analysis option."}), 400
+    with get_db() as conn:
+        row = conn.execute("SELECT content FROM tips WHERE id = ?", (tip_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "tip not found"}), 404
+    try:
+        return jsonify(llm.analyze_tip(row["content"], lens))
+    except llm.LLMError as e:
+        return jsonify({"error": "Analysis failed: %s" % e}), 502
+
+
 @app.post("/api/tips")
 @admin_required
 def create_tip():
@@ -436,6 +480,21 @@ def update_tip(tip_id):
             (content, anecdote, tip_id),
         )
         embed_quietly(conn, tip_id, content, anecdote)  # text changed → refresh its vector
+        conn.commit()
+        return jsonify(tip_with_tags(conn, tip_id))
+
+
+@app.post("/api/tips/<int:tip_id>/video")
+@admin_required
+def set_tip_video(tip_id):
+    """Attach (or clear) a YouTube / Vimeo / Cloudflare Stream video on a tip. Admin only."""
+    url = ((request.get_json(force=True) or {}).get("video_url") or "").strip()
+    if url and not video_embed(url):
+        return jsonify({"error": "Unrecognised video link — use a YouTube, Vimeo, or Cloudflare Stream URL."}), 400
+    with get_db() as conn:
+        if not conn.execute("SELECT id FROM tips WHERE id = ?", (tip_id,)).fetchone():
+            return jsonify({"error": "tip not found"}), 404
+        conn.execute("UPDATE tips SET video_url = ? WHERE id = ?", (url, tip_id))
         conn.commit()
         return jsonify(tip_with_tags(conn, tip_id))
 

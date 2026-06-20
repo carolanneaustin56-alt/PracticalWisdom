@@ -14,8 +14,7 @@
 
 <header>
   <div class="brand">
-    <img class="brand-icon" src="{{ url_for('static', filename='logo.svg') }}" alt="" width="32" height="32">
-    <span class="brand-word"><span class="bw-practical">Practical</span> <span class="bw-wisdom">Wisdom</span></span>
+    <span class="brand-word" aria-label="Practical Wisdom"><span class="bw-practical">Practical</span> <span class="bw-wisdom">W<span class="wnode-i">ı<span class="wisdom-node" aria-hidden="true"></span></span>sdom</span></span>
   </div>
   <div style="display:flex;align-items:center;gap:10px">
     <div id="auth-area"></div>
@@ -38,15 +37,21 @@
         <button class="view-btn" id="view-network">Network</button>
         <button class="view-btn" id="view-cards">Cards</button>
         <button class="view-btn" id="view-advise" style="display:none">Ask</button>
+        <button class="view-btn" id="view-favorites" style="display:none">Favorites</button>
       </div>
       <div class="tb-group" id="tb-search">
-        <input id="search-input" type="text" placeholder="Search tips by keyword or meaning" />
-        <button class="btn secondary" id="search-btn">Search</button>
-        <button class="btn secondary" id="smart-search-btn" style="display:none" title="Find tips by meaning, not just matching tags">✨ Meaning</button>
+        <div class="search-field">
+          <button class="search-go" id="search-go" type="button" aria-label="Search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          </button>
+          <input id="search-input" type="text" placeholder="Search tips…" />
+          <div class="search-mode" role="group" aria-label="Search by">
+            <button class="mode-btn active" id="mode-keyword" type="button" title="Match the words you type">Keyword</button>
+            <button class="mode-btn" id="mode-meaning" type="button" title="Find tips by meaning, even in different words">Meaning</button>
+          </div>
+        </div>
       </div>
       <div class="tb-group" id="tb-user">
-      <button class="btn secondary" id="favorites-btn" style="display:none">★ Favorites</button>
-      <button class="btn secondary" id="suggest-tip-btn" style="display:none" title="Suggest a tip for review">✍ Suggest a tip</button>
       <div id="mgmt-wrap" style="display:none">
         <button class="btn secondary" id="mgmt-toggle">Tips &amp; Tags Management ▾</button>
         <div id="mgmt-menu" class="hidden">
@@ -139,6 +144,16 @@
       <h2>Anecdote</h2>
       <div id="detail-anecdote" style="font-size:0.9rem;line-height:1.6;white-space:pre-wrap;color:#444"></div>
     </div>
+    <div id="video-editor">
+      <h2>Further information — video</h2>
+      <div id="video-row">
+        <input id="video-url-input" type="text" placeholder="Paste a YouTube, Vimeo, or Cloudflare Stream link…" />
+        <button class="btn" id="video-save-btn">Attach</button>
+      </div>
+      <div id="video-status"></div>
+      <div id="video-preview"></div>
+      <button class="btn secondary" id="video-remove-btn" style="display:none">Remove video</button>
+    </div>
     <div id="tag-editor">
       <h2>Tags</h2>
       <div id="current-tags"></div>
@@ -157,6 +172,24 @@
       <button class="btn" id="save-tags-btn">Save tags</button>
       <div id="save-status"></div>
     </div>
+  </div>
+
+  <div id="analysis-pane" class="hidden">
+    <div class="analysis-head">
+      <h2>Explore this tip</h2>
+      <button class="analysis-close" id="analysis-close" aria-label="Close">×</button>
+    </div>
+    <div id="analysis-tip"></div>
+    <div id="analysis-video"></div>
+    <div class="analysis-label">Choose an angle — generated on demand</div>
+    <div id="analysis-options">
+      <button class="analysis-opt" data-lens="apply">How to apply it</button>
+      <button class="analysis-opt" data-lens="avoid">When not to apply it</button>
+      <button class="analysis-opt" data-lens="opposing">Opposing wisdom</button>
+      <button class="analysis-opt" data-lens="misreadings">Common misreadings</button>
+      <button class="analysis-opt" data-lens="figures">Notable figures who applied it</button>
+    </div>
+    <div id="analysis-result"></div>
   </div>
 </main>
 

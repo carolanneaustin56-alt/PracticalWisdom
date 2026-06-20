@@ -421,6 +421,82 @@ def test_reject_does_not_create_tip(client, app_module):
                        headers={"X-CSRF-Token": admin_token}).status_code == 409
 
 
+def test_video_embed_parsing(app_module):
+    ve = app_module.video_embed
+    assert ve("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=5s") == "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?rel=0"
+    assert ve("https://youtu.be/dQw4w9WgXcQ") == "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?rel=0"
+    assert ve("https://www.youtube.com/shorts/abc123XYZ_-") == "https://www.youtube-nocookie.com/embed/abc123XYZ_-?rel=0"
+    assert ve("https://vimeo.com/123456789") == "https://player.vimeo.com/video/123456789"
+    assert ve("https://customer-x.cloudflarestream.com/abcdef0123456789/watch") == "https://iframe.cloudflarestream.com/abcdef0123456789"
+    assert ve("https://example.com/not-a-video") is None
+    assert ve("") is None
+
+
+def test_set_video_requires_admin(client, app_module):
+    tid = add_tip(app_module, "Stretch daily", ["physical"])
+    r = client.post(f"/api/tips/{tid}/video", json={"video_url": "https://youtu.be/x"},
+                    headers={"X-CSRF-Token": get_csrf(client)})
+    assert r.status_code == 403
+
+
+def test_set_video_rejects_bad_url(client, app_module):
+    tid = add_tip(app_module, "Stretch daily", ["physical"])
+    token = login_admin(client)
+    r = client.post(f"/api/tips/{tid}/video", json={"video_url": "https://example.com/nope"},
+                    headers={"X-CSRF-Token": token})
+    assert r.status_code == 400
+
+
+def test_set_and_clear_video(client, app_module):
+    tid = add_tip(app_module, "Stretch daily", ["physical"])
+    token = login_admin(client)
+    r = client.post(f"/api/tips/{tid}/video", json={"video_url": "https://youtu.be/dQw4w9WgXcQ"},
+                    headers={"X-CSRF-Token": token}).get_json()
+    assert r["video_url"] == "https://youtu.be/dQw4w9WgXcQ"
+    assert r["video_embed"] == "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?rel=0"
+    # it shows up in the tip everywhere (e.g. the favorites/list payload)
+    listed = next(t for t in client.get("/api/tips").get_json() if t["id"] == tid)
+    assert listed["video_embed"].endswith("dQw4w9WgXcQ?rel=0")
+    # clearing it
+    cleared = client.post(f"/api/tips/{tid}/video", json={"video_url": ""},
+                          headers={"X-CSRF-Token": token}).get_json()
+    assert cleared["video_url"] == "" and cleared["video_embed"] is None
+
+
+def test_llm_analyze_tip_parses(monkeypatch):
+    import llm
+    monkeypatch.setattr(llm, "_complete_json", lambda p, temperature=0.2: {"points": ["a", "", None, "b"]})
+    out = llm.analyze_tip("Be patient", "apply")
+    assert out["points"] == ["a", "b"]
+
+
+def test_analyze_requires_key(client, app_module):
+    tid = add_tip(app_module, "Be patient", ["moral"])
+    r = client.post(f"/api/tips/{tid}/analyze", json={"lens": "apply"}, headers={"X-CSRF-Token": get_csrf(client)})
+    assert r.status_code == 503
+
+
+def test_analyze_rejects_unknown_lens(client, app_module, monkeypatch):
+    monkeypatch.setattr(app_module.llm, "is_enabled", lambda: True)
+    tid = add_tip(app_module, "Be patient", ["moral"])
+    r = client.post(f"/api/tips/{tid}/analyze", json={"lens": "nonsense"}, headers={"X-CSRF-Token": get_csrf(client)})
+    assert r.status_code == 400
+
+
+def test_analyze_missing_tip(client, app_module, monkeypatch):
+    monkeypatch.setattr(app_module.llm, "is_enabled", lambda: True)
+    r = client.post("/api/tips/999999/analyze", json={"lens": "apply"}, headers={"X-CSRF-Token": get_csrf(client)})
+    assert r.status_code == 404
+
+
+def test_analyze_success(client, app_module, monkeypatch):
+    monkeypatch.setattr(app_module.llm, "is_enabled", lambda: True)
+    monkeypatch.setattr(app_module.llm, "analyze_tip", lambda content, lens: {"points": ["one", "two"]})
+    tid = add_tip(app_module, "Be patient", ["moral"])
+    r = client.post(f"/api/tips/{tid}/analyze", json={"lens": "figures"}, headers={"X-CSRF-Token": get_csrf(client)})
+    assert r.status_code == 200 and r.get_json()["points"] == ["one", "two"]
+
+
 def test_my_submissions_anonymous_is_empty(client):
     assert client.get("/api/submissions/mine").get_json() == {"submissions": []}
 

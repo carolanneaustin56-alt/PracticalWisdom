@@ -164,6 +164,42 @@ def advise(situation, tips):
     return {"answer": answer, "used": used_ids}
 
 
+# Lenses for "explore this tip": each maps to a specific instruction. The user picks one.
+ANALYSIS_LENSES = {
+    "apply": "Describe 3-5 concrete, everyday situations where this tip genuinely helps. Each point: "
+             "name the situation and the specific move to make. No vague platitudes.",
+    "avoid": "Describe 3-5 situations where following this tip would be a mistake or backfire. Each "
+             "point: name the situation and why the tip fails there.",
+    "opposing": "Name 3-5 pieces of opposing wisdom — principles, proverbs, or schools of thought "
+                "that genuinely push the other way. Each point: state the opposing idea and its tension with this tip.",
+    "misreadings": "Describe 3-5 common ways people misread or misapply this tip. Each point: state "
+                   "the misreading, then the correction.",
+    "figures": "Name 3-5 specific, real, well-known people (historical or modern) who notably embodied "
+               "this idea, each as 'Name — the concrete thing they did that shows it'. Only include "
+               "genuine, well-attested examples; include fewer rather than invent.",
+}
+
+
+def analyze_tip(content, lens):
+    """Analyse a tip through one chosen lens (see ANALYSIS_LENSES).
+
+    Returns {"points": [str, ...]}. Raises LLMError on an unknown lens or any API failure.
+    """
+    instruction = ANALYSIS_LENSES.get(lens)
+    if not instruction:
+        raise LLMError("unknown analysis lens: %s" % lens)
+    prompt = (
+        "Help someone think more deeply about this piece of practical wisdom:\n\n"
+        '"%s"\n\n%s\n\n'
+        "Be specific and grounded — avoid generic, obvious, or sycophantic statements. "
+        'Return a JSON object {"points": ["...", ...]}.'
+    ) % (content.strip(), instruction)
+    parsed = _complete_json(prompt, temperature=0.6)
+    if not isinstance(parsed, dict):
+        raise LLMError("unexpected response shape")
+    return {"points": _as_str_list(parsed.get("points"))}
+
+
 def _build_prompt(contents, primary_tags, secondary_tags, max_secondary):
     numbered = "\n".join("%d. %s" % (i + 1, c) for i, c in enumerate(contents))
     return (
