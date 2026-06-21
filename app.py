@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, send_file, session, make_response
+from flask import Flask, request, jsonify, render_template, send_file, session, make_response, redirect, url_for
 import sqlite3
 import secrets
 import time
@@ -120,6 +120,146 @@ def csrf_protect():
         sent = request.headers.get("X-CSRF-Token", "")
         if not expected or not sent or not secrets.compare_digest(sent, expected):
             return jsonify({"error": "Missing or invalid CSRF token — reload the page."}), 400
+
+
+# ── Session / auth endpoints the front-end relies on ──
+@app.get("/api/me")
+def api_me():
+    """Bootstrap the page: hands out the CSRF token and current login/feature state.
+
+    The front-end calls this on load; without it csrfToken stays empty and every
+    POST (including admin login) is rejected by csrf_protect.
+    """
+    user = None
+    uid = current_user_id()
+    if uid:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT id, email, name, picture FROM users WHERE id = ?", (uid,)
+            ).fetchone()
+            if row:
+                user = {"id": row["id"], "email": row["email"],
+                        "name": row["name"], "picture": row["picture"]}
+
+    pending = 0
+    if is_admin():
+        with get_db() as conn:
+            pending = conn.execute(
+                "SELECT COUNT(*) FROM tip_submissions WHERE status = 'pending'"
+            ).fetchone()[0]
+
+    return jsonify({
+        "csrf_token": csrf_token(),
+        "user": user,
+        "auth_enabled": AUTH_ENABLED,
+        "is_admin": is_admin(),
+        "embeddings_enabled": embeddings.is_enabled(),
+        "llm_enabled": llm.is_enabled(),
+        "pending_submissions": pending,
+    })
+
+
+@app.post("/api/admin/login")
+def admin_login():
+    ip = request.remote_addr or "?"
+    if _login_blocked(ip):
+        return jsonify({"error": "Too many attempts — try again in a few minutes."}), 429
+    data = request.get_json(force=True) or {}
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+    if username == ADMIN_USERNAME and check_password_hash(ADMIN_PASSWORD_HASH, password):
+        session["is_admin"] = True
+        return jsonify({"ok": True, "is_admin": True})
+    _login_failed(ip)
+    return jsonify({"error": "Incorrect username or password."}), 401
+
+
+@app.post("/api/admin/logout")
+def admin_logout():
+    session.pop("is_admin", None)
+    return jsonify({"ok": True})
+
+
+# ── Google sign-in (per-user accounts: voting + favorites) ──
+@app.get("/login")
+def login():
+    """Kick off the Google OAuth flow. The front-end links here as 'Sign in with Google'."""
+    if not AUTH_ENABLED:
+        return jsonify({"error": "Google login isn't configured on this server."}), 503
+    redirect_uri = url_for("auth_callback", _external=True)
+    return oauth.google.authorize_redirect(redirect_uri)
+
+
+@app.get("/auth/callback")
+def auth_callback():
+    """Google redirects back here. Upsert the user and start their session."""
+    if not AUTH_ENABLED:
+        return redirect("/")
+    token = oauth.google.authorize_access_token()  # validates state + exchanges the code
+    info = token.get("userinfo") or {}
+    sub = info.get("sub")
+    if not sub:
+        return redirect("/")
+    with get_db() as conn:
+        row = conn.execute("SELECT id FROM users WHERE google_sub = ?", (sub,)).fetchone()
+        if row:
+            uid = row["id"]
+            conn.execute(
+                "UPDATE users SET email = ?, name = ?, picture = ? WHERE id = ?",
+                (info.get("email"), info.get("name"), info.get("picture"), uid),
+            )
+        else:
+            cur = conn.execute(
+                "INSERT INTO users (google_sub, email, name, picture) VALUES (?, ?, ?, ?)",
+                (sub, info.get("email"), info.get("name"), info.get("picture")),
+            )
+            uid = cur.lastrowid
+        conn.commit()
+    session["uid"] = uid
+    return redirect("/")
+
+
+@app.post("/logout")
+def logout():
+    session.pop("uid", None)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/tips/<int:tip_id>/vote")
+def vote_tip(tip_id):
+    """Up/down-vote a tip. value is +1, -1, or 0 (clear). An upvote also saves a favorite."""
+    uid = current_user_id()
+    if not uid:
+        return jsonify({"error": "Sign in to vote and save favorites."}), 401
+    data = request.get_json(force=True) or {}
+    try:
+        value = int(data.get("value", 0))
+    except (TypeError, ValueError):
+        value = 0
+    if value not in (-1, 0, 1):
+        return jsonify({"error": "Invalid vote value."}), 400
+
+    with get_db() as conn:
+        if not conn.execute("SELECT 1 FROM tips WHERE id = ?", (tip_id,)).fetchone():
+            return jsonify({"error": "tip not found"}), 404
+        if value == 0:
+            conn.execute("DELETE FROM votes WHERE user_id = ? AND tip_id = ?", (uid, tip_id))
+            conn.execute("DELETE FROM favorites WHERE user_id = ? AND tip_id = ?", (uid, tip_id))
+        else:
+            conn.execute(
+                "INSERT INTO votes (user_id, tip_id, value) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id, tip_id) DO UPDATE SET value = excluded.value",
+                (uid, tip_id, value),
+            )
+            # Upvote saves a favorite; downvote removes it (favorites mirror upvotes).
+            if value == 1:
+                conn.execute(
+                    "INSERT OR IGNORE INTO favorites (user_id, tip_id) VALUES (?, ?)", (uid, tip_id)
+                )
+            else:
+                conn.execute("DELETE FROM favorites WHERE user_id = ? AND tip_id = ?", (uid, tip_id))
+        conn.commit()
+        return jsonify(tip_with_tags(conn, tip_id))
 
 
 MIGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "migrations")
