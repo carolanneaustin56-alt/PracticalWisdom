@@ -1,9 +1,13 @@
-from flask import Flask, request, jsonify, render_template, send_file
+from flask import Flask, request, jsonify, render_template, send_file, session, make_response
 import sqlite3
 import secrets
 import time
 import os
 import re
+from functools import wraps
+
+from authlib.integrations.flask_client import OAuth
+from werkzeug.security import generate_password_hash, check_password_hash
 
 import llm  # optional Gemini helpers (reads its key lazily, so import order is fine)
 import embeddings  # semantic-similarity foundation (also degrades to no-op without a key)
