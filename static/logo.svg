@@ -1,0 +1,26 @@
+<svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="pwGold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F4D279"/>
+      <stop offset="0.55" stop-color="#E5B64A"/>
+      <stop offset="1" stop-color="#C2902B"/>
+    </linearGradient>
+    <radialGradient id="pwStarGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#F7DD8C" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#F7DD8C" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="120" height="120" rx="28" fill="#0D111C"/>
+  <g transform="translate(0,4)">
+    <circle cx="71" cy="23" r="20" fill="url(#pwStarGlow)"/>
+    <path d="M26 83 C26 79 42 77 60 77 C78 77 94 79 94 83 C94 88 78 91 60 91 C42 91 26 88 26 83 Z" fill="url(#pwGold)"/>
+    <path d="M71 23 C61 38 50 60 45 82 L73 82 C74 58 78 38 71 23 Z" fill="url(#pwGold)"/>
+    <g stroke="#0D111C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="#0D111C">
+      <path d="M70 25 L60 43 L65 59 L54 73" fill="none"/>
+      <circle cx="60" cy="43" r="2.8"/>
+      <circle cx="65" cy="59" r="2.8"/>
+      <circle cx="54" cy="73" r="2.8"/>
+    </g>
+    <path d="M71 12 Q73 21 82 23 Q73 25 71 34 Q69 25 60 23 Q69 21 71 12 Z" fill="#F9E29A"/>
+  </g>
+</svg>

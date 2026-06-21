@@ -11,6 +11,9 @@ JSON format (.json) — a list of objects:
       { "content": "Write down three priorities.", "tags": ["productivity"] }
     ]
 
+Imported tips are automatically indexed for semantic search (via the local embeddings
+model), so they show up in search / related / advice straight away — no rebuild needed.
+
 Usage:
     python import_tips.py tips.txt
     python import_tips.py tips.json
@@ -21,7 +24,9 @@ import sqlite3
 import sys
 import os
 
-DB = os.path.join(os.path.dirname(__file__), "tips.db")
+import embeddings  # index the imported tips for semantic search (best-effort)
+
+DB = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "tips.db"))
 
 
 def get_or_create_tag(conn, name, tier=None):
@@ -97,6 +102,20 @@ def import_file(path):
             added += 1
 
     print(f"Imported {added} tip(s) from {path}" + (f", skipped {skipped}" if skipped else ""))
+
+    # Index the new tips for semantic search / related / advice. Best-effort: a missing
+    # embeddings table or model never undoes the import — it just prints a note.
+    if embeddings.is_enabled():
+        conn.row_factory = sqlite3.Row
+        try:
+            res = embeddings.sync_all(conn)   # embeds anything missing/stale (the new tips)
+            if res["embedded"]:
+                print(f"Indexed {res['embedded']} tip(s) for semantic search.")
+        except Exception as e:
+            print(f"(Couldn't index for search yet: {e} — run the app or rebuild later.)")
+    else:
+        print("(fastembed not installed — these tips won't appear in semantic search until indexed.)")
+
     conn.close()
 
 

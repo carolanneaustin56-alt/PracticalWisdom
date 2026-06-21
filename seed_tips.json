@@ -1,0 +1,852 @@
+[
+  {
+    "content": "good enough's not good enough",
+    "tags": [
+      "achievement"
+    ]
+  },
+  {
+    "content": "good enough is good enough",
+    "tags": [
+      "achievement"
+    ]
+  },
+  {
+    "content": "done is better than perfect",
+    "tags": [
+      "achievement"
+    ]
+  },
+  {
+    "content": "Do consequences",
+    "tags": [
+      "achievement"
+    ]
+  },
+  {
+    "content": "No worry before its time",
+    "tags": [
+      "emotional"
+    ]
+  },
+  {
+    "content": "Success = getting what I want.",
+    "tags": [
+      "achievement"
+    ]
+  },
+  {
+    "content": "Magic question: Is there a better way?",
+    "tags": [
+      "achievement"
+    ]
+  },
+  {
+    "content": "Write it down.Write it down. The bluntest pencil is sharper than the sharpest memory.",
+    "tags": [
+      "cognitive"
+    ]
+  },
+  {
+    "content": "Write your top three priorities before opening any app.",
+    "tags": [
+      "achievement",
+      "focus",
+      "morning"
+    ]
+  },
+  {
+    "content": "Read for twenty minutes before checking the news.",
+    "tags": [
+      "cognitive",
+      "learning",
+      "morning"
+    ]
+  },
+  {
+    "content": "Name the feeling you are sitting with before reacting.",
+    "tags": [
+      "emotional",
+      "clarity",
+      "mindfulness"
+    ]
+  },
+  {
+    "content": "Automate transfers to savings on the day you are paid.",
+    "tags": [
+      "financial",
+      "discipline",
+      "habit"
+    ]
+  },
+  {
+    "content": "Speak about absent people the way you would if they were present.",
+    "tags": [
+      "moral",
+      "boundaries",
+      "connection"
+    ]
+  },
+  {
+    "content": "Take a ten minute walk after every long meeting.",
+    "tags": [
+      "physical",
+      "rest",
+      "routine"
+    ]
+  },
+  {
+    "content": "Send a short message to a friend you have not seen this month.",
+    "tags": [
+      "social",
+      "connection",
+      "gratitude"
+    ]
+  },
+  {
+    "content": "Define what done looks like before you start the task.",
+    "tags": [
+      "achievement",
+      "clarity",
+      "focus"
+    ]
+  },
+  {
+    "content": "Teach the idea to someone else within a day of learning it.",
+    "tags": [
+      "cognitive",
+      "growth",
+      "reflection"
+    ]
+  },
+  {
+    "content": "Pause for three slow breaths before replying to a hard message.",
+    "tags": [
+      "emotional",
+      "mindfulness",
+      "patience"
+    ]
+  },
+  {
+    "content": "Track every expense for one week to see where money actually goes.",
+    "tags": [
+      "financial",
+      "habit",
+      "reflection"
+    ]
+  },
+  {
+    "content": "Apologise specifically for what you did and not for how it landed.",
+    "tags": [
+      "moral",
+      "clarity",
+      "courage"
+    ]
+  },
+  {
+    "content": "Drink a full glass of water before your first coffee.",
+    "tags": [
+      "physical",
+      "habit",
+      "morning"
+    ]
+  },
+  {
+    "content": "Listen for one full minute longer than feels comfortable.",
+    "tags": [
+      "social",
+      "connection",
+      "patience"
+    ]
+  },
+  {
+    "content": "Break any project into a first step that takes less than five minutes.",
+    "tags": [
+      "achievement",
+      "consistency",
+      "simplicity"
+    ]
+  },
+  {
+    "content": "Write down the question before you start searching for the answer.",
+    "tags": [
+      "cognitive",
+      "clarity",
+      "learning"
+    ]
+  },
+  {
+    "content": "Notice the story you are telling yourself and ask if it is the only one.",
+    "tags": [
+      "emotional",
+      "mindfulness",
+      "reflection"
+    ]
+  },
+  {
+    "content": "Wait twenty four hours before any unplanned purchase over a set amount.",
+    "tags": [
+      "financial",
+      "discipline",
+      "patience"
+    ]
+  },
+  {
+    "content": "Keep small promises so the big ones become believable.",
+    "tags": [
+      "moral",
+      "consistency",
+      "habit"
+    ]
+  },
+  {
+    "content": "Stretch for two minutes every time you stand up.",
+    "tags": [
+      "physical",
+      "consistency",
+      "routine"
+    ]
+  },
+  {
+    "content": "Remember names by repeating them in your first reply.",
+    "tags": [
+      "social",
+      "connection",
+      "focus"
+    ]
+  },
+  {
+    "content": "Finish one task fully before opening the next tab.",
+    "tags": [
+      "achievement",
+      "discipline",
+      "focus"
+    ]
+  },
+  {
+    "content": "Keep a notebook for ideas so your head can be empty for thinking.",
+    "tags": [
+      "cognitive",
+      "clarity",
+      "simplicity"
+    ]
+  },
+  {
+    "content": "Move your body when feelings get stuck in your head.",
+    "tags": [
+      "emotional",
+      "balance",
+      "rest"
+    ]
+  },
+  {
+    "content": "Review one bill each month and ask whether you still need it.",
+    "tags": [
+      "financial",
+      "habit",
+      "reflection"
+    ]
+  },
+  {
+    "content": "When you do not know what to say try the truth in fewer words.",
+    "tags": [
+      "moral",
+      "clarity",
+      "courage"
+    ]
+  },
+  {
+    "content": "Stop eating when you are eighty percent full rather than empty plate.",
+    "tags": [
+      "physical",
+      "balance",
+      "discipline",
+      "habit",
+      "routine"
+    ]
+  },
+  {
+    "content": "Make eye contact at the start and end of every conversation.",
+    "tags": [
+      "social",
+      "connection",
+      "focus"
+    ]
+  },
+  {
+    "content": "Set a timer for twenty five minutes and protect that block.",
+    "tags": [
+      "achievement",
+      "focus",
+      "routine"
+    ]
+  },
+  {
+    "content": "Sleep on hard decisions whenever the clock allows it.",
+    "tags": [
+      "cognitive",
+      "patience",
+      "rest"
+    ]
+  },
+  {
+    "content": "Feelings pass faster when you let them through than when you fight them.",
+    "tags": [
+      "emotional",
+      "mindfulness",
+      "patience"
+    ]
+  },
+  {
+    "content": "Pay yourself first and let the rest of life fit around what is left.",
+    "tags": [
+      "financial",
+      "discipline",
+      "habit"
+    ]
+  },
+  {
+    "content": "Praise people behind their back as readily as to their face.",
+    "tags": [
+      "moral",
+      "connection",
+      "gratitude"
+    ]
+  },
+  {
+    "content": "Get sunlight on your face within an hour of waking.",
+    "tags": [
+      "physical",
+      "morning",
+      "routine"
+    ]
+  },
+  {
+    "content": "Ask one open question for every statement you make in a chat.",
+    "tags": [
+      "social",
+      "connection",
+      "patience"
+    ]
+  },
+  {
+    "content": "Track streaks rather than perfection so a missed day does not end you.",
+    "tags": [
+      "achievement",
+      "consistency",
+      "habit"
+    ]
+  },
+  {
+    "content": "Read one book outside your field for every five inside it.",
+    "tags": [
+      "cognitive",
+      "growth",
+      "learning"
+    ]
+  },
+  {
+    "content": "Name three things you can see when anxiety starts to rise.",
+    "tags": [
+      "emotional",
+      "clarity",
+      "mindfulness"
+    ]
+  },
+  {
+    "content": "Keep a small fund for genuine emergencies so daily money can flow.",
+    "tags": [
+      "financial",
+      "balance",
+      "discipline"
+    ]
+  },
+  {
+    "content": "Tip generously when no one is counting.",
+    "tags": [
+      "moral",
+      "gratitude",
+      "habit"
+    ]
+  },
+  {
+    "content": "Lift something heavier than yesterday once a week.",
+    "tags": [
+      "physical",
+      "consistency",
+      "growth"
+    ]
+  },
+  {
+    "content": "Default to in person for any conversation you would not write down.",
+    "tags": [
+      "social",
+      "boundaries",
+      "courage"
+    ]
+  },
+  {
+    "content": "Write tomorrow's first task at the end of today.",
+    "tags": [
+      "achievement",
+      "clarity",
+      "evening"
+    ]
+  },
+  {
+    "content": "Doubt your first reading of a strong opinion.",
+    "tags": [
+      "cognitive",
+      "patience",
+      "reflection"
+    ]
+  },
+  {
+    "content": "Walk outside when a meeting leaves you wound up.",
+    "tags": [
+      "emotional",
+      "evening",
+      "rest"
+    ]
+  },
+  {
+    "content": "Choose the cheaper option that you will still use.",
+    "tags": [
+      "financial",
+      "balance",
+      "simplicity"
+    ]
+  },
+  {
+    "content": "Refuse work that requires you to be someone you would not respect.",
+    "tags": [
+      "moral",
+      "boundaries",
+      "courage"
+    ]
+  },
+  {
+    "content": "Sit up tall whenever you notice yourself slumping.",
+    "tags": [
+      "physical",
+      "habit",
+      "mindfulness"
+    ]
+  },
+  {
+    "content": "Introduce two people who would benefit from knowing each other.",
+    "tags": [
+      "social",
+      "connection",
+      "growth"
+    ]
+  },
+  {
+    "content": "Plan the week on Sunday so Monday does not start with deciding.",
+    "tags": [
+      "achievement",
+      "clarity",
+      "routine"
+    ]
+  },
+  {
+    "content": "Ask better questions instead of louder ones.",
+    "tags": [
+      "cognitive",
+      "clarity",
+      "patience"
+    ]
+  },
+  {
+    "content": "Forgive yourself for the version of you that did not know better.",
+    "tags": [
+      "emotional",
+      "growth",
+      "mindfulness"
+    ]
+  },
+  {
+    "content": "Buy quality once for things you use every day.",
+    "tags": [
+      "financial",
+      "patience",
+      "simplicity"
+    ]
+  },
+  {
+    "content": "Tell the small truth that no one will ever check.",
+    "tags": [
+      "moral",
+      "consistency",
+      "courage"
+    ]
+  },
+  {
+    "content": "Treat sleep as the foundation that everything else stands on.",
+    "tags": [
+      "physical",
+      "habit",
+      "rest"
+    ]
+  },
+  {
+    "content": "Show up early so the host can breathe.",
+    "tags": [
+      "social",
+      "connection",
+      "gratitude"
+    ]
+  },
+  {
+    "content": "Aim for one finished thing a day rather than ten started ones.",
+    "tags": [
+      "achievement",
+      "focus",
+      "simplicity"
+    ]
+  },
+  {
+    "content": "Read sources you disagree with carefully before dismissing them.",
+    "tags": [
+      "cognitive",
+      "growth",
+      "patience"
+    ]
+  },
+  {
+    "content": "Cry when you need to and let it be a release not a verdict.",
+    "tags": [
+      "emotional",
+      "mindfulness",
+      "rest"
+    ]
+  },
+  {
+    "content": "Invest in things you understand and skip the ones you do not.",
+    "tags": [
+      "financial",
+      "clarity",
+      "patience"
+    ]
+  },
+  {
+    "content": "Return what you borrowed in better shape if you can.",
+    "tags": [
+      "moral",
+      "gratitude",
+      "habit"
+    ]
+  },
+  {
+    "content": "Eat slowly enough to taste the third bite.",
+    "tags": [
+      "physical",
+      "balance",
+      "mindfulness"
+    ]
+  },
+  {
+    "content": "Compliment the work and not just the person.",
+    "tags": [
+      "social",
+      "clarity",
+      "connection"
+    ]
+  },
+  {
+    "content": "Protect mornings for the work that scares you a little.",
+    "tags": [
+      "achievement",
+      "focus",
+      "morning"
+    ]
+  },
+  {
+    "content": "Sleep is part of thinking so treat it like it is.",
+    "tags": [
+      "cognitive",
+      "evening",
+      "rest"
+    ]
+  },
+  {
+    "content": "Notice when small things annoy you because that is usually a bigger thing in disguise.",
+    "tags": [
+      "emotional",
+      "mindfulness",
+      "reflection"
+    ]
+  },
+  {
+    "content": "Decide what enough looks like before chasing more.",
+    "tags": [
+      "financial",
+      "balance",
+      "clarity"
+    ]
+  },
+  {
+    "content": "Be the same person whether or not the cameras are running.",
+    "tags": [
+      "moral",
+      "consistency",
+      "courage"
+    ]
+  },
+  {
+    "content": "Climb stairs whenever they are available and the lift is not faster.",
+    "tags": [
+      "physical",
+      "consistency",
+      "habit"
+    ]
+  },
+  {
+    "content": "Hold the door even when no one is watching for it.",
+    "tags": [
+      "social",
+      "gratitude",
+      "habit"
+    ]
+  },
+  {
+    "content": "Cut the to do list in half and finish what is left.",
+    "tags": [
+      "achievement",
+      "focus",
+      "simplicity"
+    ]
+  },
+  {
+    "content": "Write to find out what you think.",
+    "tags": [
+      "cognitive",
+      "clarity",
+      "reflection"
+    ]
+  },
+  {
+    "content": "Take the long way home when the day was long.",
+    "tags": [
+      "emotional",
+      "evening",
+      "rest"
+    ]
+  },
+  {
+    "content": "Compare prices on the things you buy weekly not the ones you buy yearly.",
+    "tags": [
+      "financial",
+      "discipline",
+      "habit"
+    ]
+  },
+  {
+    "content": "Keep secrets that are not yours to share.",
+    "tags": [
+      "moral",
+      "boundaries",
+      "patience"
+    ]
+  },
+  {
+    "content": "Walk for ten minutes after every meal you can.",
+    "tags": [
+      "physical",
+      "habit",
+      "routine"
+    ]
+  },
+  {
+    "content": "Remember birthdays for the people who never remind you of theirs.",
+    "tags": [
+      "social",
+      "consistency",
+      "gratitude"
+    ]
+  },
+  {
+    "content": "Rest is part of the project not the reward for finishing it.",
+    "tags": [
+      "achievement",
+      "balance",
+      "rest"
+    ]
+  },
+  {
+    "content": "Steel man the argument you want to attack.",
+    "tags": [
+      "cognitive",
+      "clarity",
+      "patience"
+    ]
+  },
+  {
+    "content": "Sit with disappointment before you try to fix it.",
+    "tags": [
+      "emotional",
+      "mindfulness",
+      "patience"
+    ]
+  },
+  {
+    "content": "Read the small print on anything that recurs.",
+    "tags": [
+      "financial",
+      "clarity",
+      "discipline"
+    ]
+  },
+  {
+    "content": "Apologise to the person you wronged not the audience that watched.",
+    "tags": [
+      "moral",
+      "connection",
+      "courage"
+    ]
+  },
+  {
+    "content": "Stop staring at screens for ten minutes every hour.",
+    "tags": [
+      "physical",
+      "rest",
+      "routine"
+    ]
+  },
+  {
+    "content": "Bring food when you visit and do not make a thing of it.",
+    "tags": [
+      "social",
+      "gratitude",
+      "habit"
+    ]
+  },
+  {
+    "content": "Note three wins at the end of each day no matter how small.",
+    "tags": [
+      "achievement",
+      "evening",
+      "reflection"
+    ]
+  },
+  {
+    "content": "Read slowly when the writer is trying to change your mind.",
+    "tags": [
+      "cognitive",
+      "learning",
+      "patience"
+    ]
+  },
+  {
+    "content": "Trust silence more than a quick answer when feelings are loud.",
+    "tags": [
+      "emotional",
+      "mindfulness",
+      "patience"
+    ]
+  },
+  {
+    "content": "Lend money only when you can afford to call it a gift.",
+    "tags": [
+      "financial",
+      "boundaries",
+      "clarity"
+    ]
+  },
+  {
+    "content": "Do the small honest thing even when it costs you a little.",
+    "tags": [
+      "moral",
+      "consistency",
+      "courage"
+    ]
+  },
+  {
+    "content": "Stand up every thirty minutes while you work.",
+    "tags": [
+      "physical",
+      "habit",
+      "routine"
+    ]
+  },
+  {
+    "content": "Listen to understand before you listen to reply.",
+    "tags": [
+      "social",
+      "learning",
+      "patience"
+    ]
+  },
+  {
+    "content": "Finish each work block by writing the next first step.",
+    "tags": [
+      "achievement",
+      "clarity",
+      "routine"
+    ]
+  },
+  {
+    "content": "Read the original source before the summary of it.",
+    "tags": [
+      "cognitive",
+      "learning",
+      "patience"
+    ]
+  },
+  {
+    "content": "Let yourself be bad at something new for longer than feels comfortable.",
+    "tags": [
+      "emotional",
+      "growth",
+      "patience"
+    ]
+  },
+  {
+    "content": "Round purchases up and let the change build a buffer.",
+    "tags": [
+      "financial",
+      "habit",
+      "simplicity"
+    ]
+  },
+  {
+    "content": "Notice the people who do quiet work and thank them out loud.",
+    "tags": [
+      "moral",
+      "connection",
+      "gratitude"
+    ]
+  },
+  {
+    "content": "Move first then think because the brain follows the body.",
+    "tags": [
+      "physical",
+      "morning",
+      "routine"
+    ]
+  },
+  {
+    "content": "Show up when you said you would especially when it is inconvenient.",
+    "tags": [
+      "social",
+      "consistency",
+      "courage"
+    ]
+  },
+  {
+    "content": "Choose one thing to be brilliant at this quarter and let others be ordinary.",
+    "tags": [
+      "achievement",
+      "discipline",
+      "focus"
+    ]
+  },
+  {
+    "content": "Spend a minute a day on a question you cannot answer yet.",
+    "tags": [
+      "cognitive",
+      "patience",
+      "reflection"
+    ]
+  }
+]
