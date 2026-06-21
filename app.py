@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, send_file
 import sqlite3
 import os
 
@@ -288,6 +288,17 @@ def import_tags():
         conn.commit()
 
     return jsonify({"added": added, "submitted": len(names), "tier": tier}), 201
+
+
+_DOWNLOAD_TOKEN = os.environ.get("DOWNLOAD_TOKEN", "")
+
+
+@app.get("/admin/download-db")
+def download_db():
+    token = request.args.get("token", "")
+    if not _DOWNLOAD_TOKEN or token != _DOWNLOAD_TOKEN:
+        return jsonify({"error": "forbidden"}), 403
+    return send_file(DB, as_attachment=True, download_name="tips.db")
 
 
 if __name__ == "__main__":
