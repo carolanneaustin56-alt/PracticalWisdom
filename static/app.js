@@ -1075,9 +1075,9 @@
     renderNetworkDom();
     renderLegend();
     NET.transform = { x: 0, y: 0, k: 1 };
-    // Phones get the region overview (drill-down keeps it legible on a small screen);
-    // desktop keeps the full force-directed network, which the wider canvas handles well.
-    if (isMobileNet()) showOverview(); else showFull();
+    // The full network is always present (phones included): no node is ever hidden, so a
+    // tip's links — including to other regions — are always reachable.
+    showFull();
   }
 
   // One cluster per primary tag, arranged evenly on a ring around the centre.
@@ -1332,8 +1332,9 @@
     applySelectionHighlight();
     showCard(n.tip);
     updateExprHint();
-    // On a phone, frame this tip's ego-network in the area above the bottom-sheet card.
-    if (isMobileNet()) fitTo(egoNodes());
+    // On a phone, re-frame the whole network into the space above the bottom-sheet card so
+    // it stays fully visible (the selection + its links are highlighted within it).
+    if (isMobileNet()) frameCurrentLevel();
     // Semantic neighbours power both the meaning-mode gold suggestion and related-link mode.
     const needsRelated = (suggestMode === "meaning" || NET.linkMode === "related") && embeddingsEnabled;
     if (needsRelated && !relatedCache[n.id]) {
@@ -1493,6 +1494,7 @@
     });
     renderLinkModeUI();
     renderTagExpr();
+    $("net-tooltip").style.display = "none";   // the card supersedes any lingering hover tooltip
     $("net-card").classList.remove("hidden");
   }
   function hideCard() { $("net-card").classList.add("hidden"); }
@@ -1608,11 +1610,9 @@
   // Clicking a region: phones drill into it (overview ⇄ focus); desktop just spotlights it
   // within the full network (full ⇄ focus).
   function toggleFocus(tag) {
-    if (isMobileNet()) {
-      (NET.level === "focus" && NET.focus === tag) ? showOverview() : showFocus(tag);
-    } else {
-      (NET.level === "focus" && NET.focus === tag) ? showFull() : desktopFocus(tag);
-    }
+    // On phones the whole network stays in view, so a region tap doesn't zoom/hide anything.
+    if (isMobileNet()) return;
+    (NET.level === "focus" && NET.focus === tag) ? showFull() : desktopFocus(tag);
   }
 
   // Overview: just the region bubbles (+ their links). Individual tips are hidden.
@@ -1744,10 +1744,8 @@
       loadTips("");
       loadSidebar();
       buildNetwork();
-    } else if (isMobileNet()) {
-      showOverview();   // phones: back out to the region overview (clears selection + focus)
     } else {
-      showFull();       // desktop: clear selection + focus, show the whole network
+      showFull();   // clear selection + focus, show the whole network
     }
   }
 
@@ -1758,8 +1756,8 @@
     } else if (NET.level === "focus") {
       const tail = isMobileNet() ? "<b>Reset</b> for all regions" : "Reset to zoom out";
       $("net-hint").innerHTML = `Exploring <b>${escHtml(NET.focus)}</b> — click a tip for its links · ${tail}`;
-    } else if (NET.level === "overview") {
-      $("net-hint").innerHTML = `Each bubble is a region — <b>click one</b> to explore its tips · scroll to zoom · drag to pan`;
+    } else if (isMobileNet()) {
+      $("net-hint").innerHTML = `Tap a <b>tip</b> for its links · pinch to zoom · drag to pan`;
     } else {
       $("net-hint").innerHTML = `Click a <b>region</b> to focus it · click a <b>node</b> for its links &amp; details · scroll to zoom · drag to pan`;
     }
@@ -1767,6 +1765,9 @@
 
   // ── Hover tooltip ──
   function onNodeHover(n, e) {
+    // Touch devices have no real hover — a tap fires mouseenter too, which would leave the
+    // tooltip stuck on screen next to the card (a confusing "second card"). Skip it there.
+    if (window.matchMedia("(hover: none)").matches) return;
     if (NET.selected == null) n.el.classList.add("hover");
     const tip = n.tip;
     const snippet = tip.content.length > 130 ? tip.content.slice(0, 127) + "…" : tip.content;
@@ -2412,10 +2413,7 @@
   $("linkmode-related").onclick = () => setLinkMode("related");
   $("net-reset").onclick = resetView;
   // Re-layout reshuffles the tips of the region you're exploring (no-op in the overview).
-  $("net-relayout").onclick = () => {
-    if (isMobileNet()) { if (NET.level === "focus") { layoutRegion(NET.focus); fitTo(focusedNodes()); } }
-    else { scatterNodes(); startSim(); }   // desktop: re-run the force layout
-  };
+  $("net-relayout").onclick = () => { scatterNodes(); startSim(); };   // re-run the force layout
   $("net-clear-history").onclick = async () => {
     NET.visited = new Set();
     NET.prevSelected = null;
